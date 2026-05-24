@@ -1,3 +1,14 @@
+Metadata-Version: 2.4
+Name: gaussfsbp
+Version: 0.1.0
+Summary: 1D generalized SBP-SAT steady solver for variable-coefficient advection
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.26
+Requires-Dist: scipy>=1.11
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+
 # Paper-GaussFSBP
 
 `gaussfsbp` is an initial 1D generalized SBP-SAT solver for forced linear advection.
