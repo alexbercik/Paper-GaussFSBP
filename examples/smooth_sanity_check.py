@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import numpy as np
+import matplotlib.pyplot as plt
 
-from gaussfsbp.assembly import assemble_system
-from gaussfsbp.mesh import ElementSpec, Mesh1D
-from gaussfsbp.norms import convergence_rate, global_H_error
-from gaussfsbp.operators import builtin_operator_repository
-from gaussfsbp.problems import Problem
-from gaussfsbp.solve import solve_steady
+from src.assembly import assemble_system
+from src.elements import Element1D, make_uniform_elements
+from src.norms import convergence_rate, global_H_error
+from src.operator_library import OperatorSpec
+from src.plotting import (
+    exact_profile_on_domain,
+    plot_convergence,
+    plot_solution_profiles,
+    profile_from_elements,
+)
+from src.problems import Problem
+from src.solve import solve_steady
 
 
 def u_exact(x: np.ndarray) -> np.ndarray:
@@ -32,38 +39,87 @@ def build_problem(case: str) -> Problem:
     return Problem(a_fun=a_fun, b_fun=b_fun, f_fun=f_fun, exact_fun=u_exact)
 
 
-def run_case(case: str, sat_type: str = "upwind") -> None:
-    repository = builtin_operator_repository()
+def solve_on_mesh(case: str, num_elements: int, sat_type: str = "upwind") -> tuple[list[Element1D], np.ndarray]:
+    problem = build_problem(case)
+    operator = OperatorSpec(
+        ["1", "x", "x^2"],
+        ["1", "x", "x^2", "x^3", "x^4", "x^5"],
+        "open",
+    )
+    elements = make_uniform_elements(
+        domain=(0.0, 1.0),
+        num_elements=num_elements,
+        operators=operator,
+        a_fun=problem.a_fun,
+        b_fun=problem.b_fun,
+        f_fun=problem.f_fun,
+        exact_fun=problem.exact_fun,
+    )
+    system = assemble_system(
+        elements,
+        left_bc_fun=problem.left_bc_fun or problem.exact_fun,
+        sat_type=sat_type,
+    )
+    u, _ = solve_steady(system.matrix, system.rhs)
+    return system.elements, u
+
+
+def run_case(case: str, sat_type: str = "upwind") -> tuple[np.ndarray, np.ndarray]:
     element_counts = [4, 8, 16, 32]
 
     errors: list[float] = []
+    dofs: list[float] = []
     hs: list[float] = []
 
     print(f"\nCase: {case}, SAT: {sat_type}")
     print("num_elements  total_dofs  H_error        rate")
 
     for nelem in element_counts:
-        specs = [
-            ElementSpec(["1", "x", "x^2"], "closed", selector=(i % 2))
-            for i in range(nelem)
-        ]
-        mesh = Mesh1D.uniform(domain=(0.0, 1.0), num_elements=nelem, element_spec=specs[0])
-        mesh = Mesh1D.from_bounds(mesh.domain, mesh.element_bounds, specs)
+        elements, u = solve_on_mesh(case, nelem, sat_type=sat_type)
+        err = global_H_error(elements, u, u_exact)
 
-        system = assemble_system(mesh, repository, build_problem(case), sat_type=sat_type)
-        u, _ = solve_steady(system.matrix, system.rhs)
-        err = global_H_error(system.elements, u, u_exact)
-
+        n_dof = nelem * 3
         errors.append(err)
+        dofs.append(n_dof)
         hs.append(1.0 / nelem)
 
     rates = convergence_rate(np.array(errors), np.array(hs))
-    for nelem, err, rate in zip(element_counts, errors, rates):
-        dofs = nelem * 3
+    for nelem, n_dof, err, rate in zip(element_counts, dofs, errors, rates):
         rate_str = "-" if np.isnan(rate) else f"{rate:8.4f}"
-        print(f"{nelem:12d}  {dofs:10d}  {err:12.4e}  {rate_str}")
+        print(f"{nelem:12d}  {n_dof:10d}  {err:12.4e}  {rate_str}")
+
+    return np.array(dofs), np.array(errors)
 
 
 if __name__ == "__main__":
-    run_case("conservative", sat_type="upwind")
-    run_case("non-conservative", sat_type="upwind")
+    sat_type = "upwind"
+    coarse_elements = 4
+
+    dof_cons, err_cons = run_case("conservative", sat_type=sat_type)
+    dof_noncons, err_noncons = run_case("non-conservative", sat_type=sat_type)
+
+    plot_convergence(
+        np.vstack([dof_cons, dof_noncons]),
+        np.vstack([err_cons, err_noncons]),
+        [f"conservative ({sat_type})", f"non-conservative ({sat_type})"],
+        title="Smooth problem: $H$ error vs. degrees of freedom",
+        grid=True,
+    )
+
+    elements_cons, u_cons = solve_on_mesh("conservative", coarse_elements, sat_type=sat_type)
+    elements_noncons, u_noncons = solve_on_mesh("non-conservative", coarse_elements, sat_type=sat_type)
+    x_exact, u_exact_vals = exact_profile_on_domain(u_exact, domain=(0.0, 1.0))
+
+    plot_solution_profiles(
+        [
+            profile_from_elements(elements_cons, u_cons),
+            profile_from_elements(elements_noncons, u_noncons),
+        ],
+        [f"conservative ({sat_type})", f"non-conservative ({sat_type})"],
+        x_exact=x_exact,
+        u_exact=u_exact_vals,
+        title=rf"Coarsest mesh ({coarse_elements} elements)",
+        grid=True,
+    )
+
+    plt.show()

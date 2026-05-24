@@ -15,7 +15,7 @@ def global_H_norm(elements: list[Element1D], u: np.ndarray) -> float:
     local = _split(elements, u)
     val = 0.0
     for element, u_local in zip(elements, local):
-        val += float(np.sum(element.H_x * u_local * u_local))
+        val += float(np.sum(element.H * u_local * u_local))
     return float(np.sqrt(val))
 
 
@@ -23,7 +23,7 @@ def global_weighted_energy(elements: list[Element1D], u: np.ndarray) -> float:
     local = _split(elements, u)
     val = 0.0
     for element, u_local in zip(elements, local):
-        weights = (element.b / element.a) * element.H_x
+        weights = (element.b / element.a) * element.H
         val += float(np.sum(weights * u_local * u_local))
     return float(val)
 
@@ -33,7 +33,7 @@ def global_L2_error(elements: list[Element1D], u: np.ndarray, exact) -> float:
     val = 0.0
     for element, u_local in zip(elements, local):
         err = u_local - np.asarray(exact(element.x), dtype=float)
-        val += float(np.sum(element.H_x * err * err))
+        val += float(np.sum(element.H * err * err))
     return float(np.sqrt(val))
 
 

@@ -32,11 +32,11 @@ class Operator:
     selector: int
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "nodes", np.asarray(self.nodes, dtype=float))
-        object.__setattr__(self, "D", np.asarray(self.D, dtype=float))
-        object.__setattr__(self, "H", np.asarray(self.H, dtype=float))
-        object.__setattr__(self, "tL", np.asarray(self.tL, dtype=float))
-        object.__setattr__(self, "tR", np.asarray(self.tR, dtype=float))
+        object.__setattr__(self, "nodes", np.asarray(self.nodes, dtype=float).copy())
+        object.__setattr__(self, "D", np.asarray(self.D, dtype=float).copy())
+        object.__setattr__(self, "H", np.asarray(self.H, dtype=float).copy())
+        object.__setattr__(self, "tL", np.asarray(self.tL, dtype=float).copy())
+        object.__setattr__(self, "tR", np.asarray(self.tR, dtype=float).copy())
         validate_operator_dict(self.to_dict())
 
     def boundary_matrix(self) -> np.ndarray:
@@ -44,14 +44,14 @@ class Operator:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "basis": self.basis,
-            "quad_basis": self.quad_basis,
+            "basis": list(self.basis),
+            "quad_basis": list(self.quad_basis),
             "op_type": self.op_type,
-            "nodes": self.nodes,
-            "D": self.D,
-            "H": self.H,
-            "tL": self.tL,
-            "tR": self.tR,
+            "nodes": self.nodes.copy(),
+            "D": self.D.copy(),
+            "H": self.H.copy(),
+            "tL": self.tL.copy(),
+            "tR": self.tR.copy(),
             "selector": self.selector,
         }
 
@@ -102,61 +102,13 @@ def validate_operator_dict(operator_data: dict[str, Any]) -> None:
         raise ValueError("H entries must be positive")
 
 
+def canonical_basis_key(basis: list[str]) -> tuple[str, ...]:
+    """Order-invariant key for matching basis / quad_basis lists."""
+    return tuple(sorted(basis))
+
+
 def check_sbp_property(operator: Operator, tol: float = 1e-12) -> bool:
     HD = operator.H[:, None] * operator.D
     residual = HD + HD.T - operator.boundary_matrix()
     return float(np.linalg.norm(residual, ord=np.inf)) <= tol
 
-
-class OperatorRepository:
-    def __init__(self, operators: list[Operator] | None = None) -> None:
-        self._operators = list(operators) if operators is not None else []
-
-    @property
-    def operators(self) -> list[Operator]:
-        return list(self._operators)
-
-    def add_operator(self, operator: Operator) -> None:
-        self._operators.append(operator)
-
-    def get_operator(self, basis: list[str], op_type: str, selector: int) -> Operator:
-        for operator in self._operators:
-            if (
-                operator.basis == basis
-                and operator.op_type == op_type
-                and operator.selector == selector
-            ):
-                return operator
-        raise KeyError(
-            f"No operator found for basis={basis}, op_type={op_type}, selector={selector}"
-        )
-
-
-def _closed_three_node_operator(selector: int) -> Operator:
-    data = {
-        "basis": ["1", "x", "x^2"],
-        "quad_basis": ["1", "x", "x^2", "x^3", "x^4"],
-        "op_type": "closed",
-        "nodes": np.array([-1.0, 0.0, 1.0]),
-        "D": np.array(
-            [
-                [-1.5, 2.0, -0.5],
-                [-0.5, 0.0, 0.5],
-                [0.5, -2.0, 1.5],
-            ]
-        ),
-        "H": np.array([1.0 / 3.0, 4.0 / 3.0, 1.0 / 3.0]),
-        "tL": np.array([1.0, 0.0, 0.0]),
-        "tR": np.array([0.0, 0.0, 1.0]),
-        "selector": selector,
-    }
-    return Operator(**data)
-
-
-def builtin_operator_repository() -> OperatorRepository:
-    return OperatorRepository(
-        [
-            _closed_three_node_operator(selector=0),
-            _closed_three_node_operator(selector=1),
-        ]
-    )

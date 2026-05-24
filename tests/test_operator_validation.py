@@ -1,11 +1,12 @@
 import numpy as np
 import pytest
 
-from gaussfsbp.operators import builtin_operator_repository, validate_operator_dict
+from src.operator_library import get_operator
+from src.operators import validate_operator_dict
 
 
 def valid_operator_dict() -> dict:
-    op = builtin_operator_repository().get_operator(["1", "x", "x^2"], "closed", 0)
+    op = get_operator(["1", "x", "x^2"], ["1", "x", "x^2", "x^3"], "closed")
     return op.to_dict()
 
 

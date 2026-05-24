@@ -16,8 +16,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
+  "matplotlib>=3.8",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src"]
+
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["."]
 testpaths = ["tests"]

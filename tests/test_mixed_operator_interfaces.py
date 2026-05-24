@@ -1,29 +1,26 @@
 import numpy as np
 
-from gaussfsbp.assembly import assemble_homogeneous_operator
-from gaussfsbp.elements import create_elements, trace_left, trace_right
-from gaussfsbp.mesh import ElementSpec, Mesh1D
-from gaussfsbp.operators import builtin_operator_repository
+from src.assembly import calc_LHS
+from src.elements import make_elements, trace_left, trace_right
+from src.operator_library import OperatorSpec
 
 
 def test_mixed_operator_interface_selection_and_traces() -> None:
-    repo = builtin_operator_repository()
-    specs = [
-        ElementSpec(["1", "x", "x^2"], "closed", 0),
-        ElementSpec(["1", "x", "x^2"], "closed", 1),
-        ElementSpec(["1", "x", "x^2"], "closed", 0),
-        ElementSpec(["1", "x", "x^2"], "closed", 1),
-    ]
-    bounds = np.linspace(0.0, 1.0, len(specs) + 1)
-    mesh = Mesh1D.from_bounds((0.0, 1.0), bounds, specs)
-
-    elements = create_elements(
-        mesh,
-        repo,
+    closed = OperatorSpec(["1", "x", "x^2"], ["1", "x", "x^2", "x^3"], "closed")
+    open_ = OperatorSpec(
+        ["1", "x", "x^2"],
+        ["1", "x", "x^2", "x^3", "x^4", "x^5"],
+        "open",
+    )
+    operators = [closed, open_, open_, closed]
+    bounds = np.linspace(0.0, 1.0, len(operators) + 1)
+    elements = make_elements(
+        bounds,
+        operators,
         a_fun=lambda x: np.ones_like(x),
         b_fun=lambda x: np.ones_like(x),
     )
-    L = assemble_homogeneous_operator(elements, sat_type="symmetric")
+    L = calc_LHS(elements, sat_type="symmetric")
 
     assert L.shape[0] == sum(el.x.size for el in elements)
 
