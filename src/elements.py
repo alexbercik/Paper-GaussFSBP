@@ -6,11 +6,11 @@ from typing import Callable, Union
 
 import numpy as np
 
-from .operator_library import OperatorSpec, operator_from_spec
+from .operator_library import OperatorSpec, get_operator_by_name, operator_from_spec
 from .operators import Operator
 
 
-OperatorChoice = Union[Operator, OperatorSpec]
+OperatorChoice = Union[Operator, OperatorSpec, str]
 
 
 @dataclass
@@ -59,14 +59,16 @@ def _resolve_operator(operator: OperatorChoice) -> Operator:
         return operator
     if isinstance(operator, OperatorSpec):
         return operator_from_spec(operator)
-    raise TypeError("operators must be Operator or OperatorSpec instances")
+    if isinstance(operator, str):
+        return get_operator_by_name(operator)
+    raise TypeError("operators must be Operator, OperatorSpec, or operator names")
 
 
 def _operators_for_elements(
     operators: OperatorChoice | Sequence[OperatorChoice],
     num_elements: int,
 ) -> list[Operator]:
-    if isinstance(operators, (Operator, OperatorSpec)):
+    if isinstance(operators, (Operator, OperatorSpec, str)):
         return [_resolve_operator(operators) for _ in range(num_elements)]
 
     operator_list = list(operators)

@@ -50,5 +50,18 @@ def test_invalid_op_type() -> None:
         validate_operator_dict(data)
 
 
+def test_name_may_be_none() -> None:
+    data = valid_operator_dict()
+    data["name"] = None
+    validate_operator_dict(data)
+
+
+def test_invalid_name_type() -> None:
+    data = valid_operator_dict()
+    data["name"] = 42
+    with pytest.raises(TypeError):
+        validate_operator_dict(data)
+
+
 def test_valid_builtin_operator() -> None:
     validate_operator_dict(valid_operator_dict())

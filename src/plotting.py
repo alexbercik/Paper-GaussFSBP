@@ -240,7 +240,7 @@ def plot_convergence(
         if len(dof_fit) > 2:
             slope, intercept = _fit_log_log(dof_fit, err_fit)
             if showslope:
-                slope_label = rf" ($p={slope:.2f}$)"
+                slope_label = rf" ({slope:.2f})"
             plt.loglog(
                 dof_mod,
                 err_mod,
@@ -259,7 +259,7 @@ def plot_convergence(
                 np.log(dof_mod[1]) - np.log(dof_mod[0])
             )
             if showslope:
-                slope_label = rf" ($p={slope:.2f}$)"
+                slope_label = rf" ({slope:.2f})"
             plt.loglog(
                 dof_mod,
                 err_mod,

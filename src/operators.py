@@ -7,6 +7,7 @@ import numpy as np
 
 VALID_OP_TYPES = {"open", "closed", "half-open-left", "half-open-right"}
 REQUIRED_OPERATOR_KEYS = {
+    "name",
     "basis",
     "quad_basis",
     "op_type",
@@ -30,6 +31,7 @@ class Operator:
     tL: np.ndarray
     tR: np.ndarray
     selector: int
+    name: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "nodes", np.asarray(self.nodes, dtype=float).copy())
@@ -44,6 +46,7 @@ class Operator:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "name": self.name,
             "basis": list(self.basis),
             "quad_basis": list(self.quad_basis),
             "op_type": self.op_type,
@@ -63,6 +66,7 @@ def validate_operator_dict(operator_data: dict[str, Any]) -> None:
             f"{sorted(REQUIRED_OPERATOR_KEYS)}"
         )
 
+    name = operator_data["name"]
     basis = operator_data["basis"]
     quad_basis = operator_data["quad_basis"]
     op_type = operator_data["op_type"]
@@ -73,6 +77,8 @@ def validate_operator_dict(operator_data: dict[str, Any]) -> None:
     tL = np.asarray(operator_data["tL"], dtype=float)
     tR = np.asarray(operator_data["tR"], dtype=float)
 
+    if name is not None and not isinstance(name, str):
+        raise TypeError("name must be a string or None")
     if not isinstance(basis, list) or any(not isinstance(item, str) for item in basis):
         raise TypeError("basis must be a list of strings")
     if not isinstance(quad_basis, list) or any(
@@ -111,4 +117,3 @@ def check_sbp_property(operator: Operator, tol: float = 1e-12) -> bool:
     HD = operator.H[:, None] * operator.D
     residual = HD + HD.T - operator.boundary_matrix()
     return float(np.linalg.norm(residual, ord=np.inf)) <= tol
-

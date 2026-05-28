@@ -35,6 +35,7 @@ No split forms are used.
 
 Operators live on reference element `[-1, 1]` and use dictionary fields:
 
+- `name` as a unique string identifier, or `None` for unnamed operators
 - `basis`, `quad_basis`
 - `op_type` in `{open, closed, half-open-left, half-open-right}`
 - `nodes`, `D`, `H`, `tL`, `tR`, `selector`
@@ -42,7 +43,10 @@ Operators live on reference element `[-1, 1]` and use dictionary fields:
 Reference operators live in `src/operator_library.py`. Use `OperatorSpec` or
 `get_operator(...)` to choose entries by `(basis, quad_basis, op_type,
 selector)`; ``basis`` and ``quad_basis`` are matched up to permutation.
-``selector`` defaults to ``0``.
+``selector`` defaults to ``0``. Named operators can also be selected directly
+with `get_operator("LGLp2")`, `get_operator_by_name("LGLp2")`, or
+`OperatorSpec(name="LGLp2")`; unnamed operators are available only through the
+structural lookup key.
 
 Affine element scaling for `[x_L, x_R]` with `h = x_R - x_L`:
 - `D = (2/h) D_ref`
@@ -58,6 +62,12 @@ choice, or a list with one choice per element:
 ```python
 operator = OperatorSpec(["1", "x", "x^2"], ["1", "x", "x^2", "x^3"], "closed")
 elements = make_uniform_elements((0.0, 1.0), 8, operator, a_fun, b_fun, f_fun)
+```
+
+Named operators can be passed directly:
+
+```python
+elements = make_uniform_elements((0.0, 1.0), 8, "LGLp2", a_fun, b_fun, f_fun)
 ```
 
 For mixed reference operators, pass `operators=[op0, op1, ...]` to

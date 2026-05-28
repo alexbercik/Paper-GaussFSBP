@@ -46,6 +46,7 @@ def solve_on_mesh(case: str, num_elements: int, sat_type: str = "upwind") -> tup
         ["1", "x", "x^2", "x^3", "x^4", "x^5"],
         "open",
     )
+    #operator = OperatorSpec("LGp2") # alternatively, can just use the name
     elements = make_uniform_elements(
         domain=(0.0, 1.0),
         num_elements=num_elements,
@@ -103,7 +104,7 @@ if __name__ == "__main__":
         np.vstack([err_cons, err_noncons]),
         [f"conservative ({sat_type})", f"non-conservative ({sat_type})"],
         title="Smooth problem: $H$ error vs. degrees of freedom",
-        grid=True,
+        grid=True
     )
 
     elements_cons, u_cons = solve_on_mesh("conservative", coarse_elements, sat_type=sat_type)
