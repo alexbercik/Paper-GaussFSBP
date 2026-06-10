@@ -38,7 +38,7 @@ Operators live on reference element `[-1, 1]` and use dictionary fields:
 - `name` as a unique string identifier, or `None` for unnamed operators
 - `basis`, `quad_basis`
 - `op_type` in `{open, closed, half-open-left, half-open-right}`
-- `nodes`, `D`, `H`, `tL`, `tR`, `selector`
+- `interval`, `nodes`, `D`, `H`, `tL`, `tR`, `selector`
 
 Reference operators live in `src/operator_library.py`. Use `OperatorSpec` or
 `get_operator(...)` to choose entries by `(basis, quad_basis, op_type,
@@ -48,9 +48,10 @@ with `get_operator("LGLp2")`, `get_operator_by_name("LGLp2")`, or
 `OperatorSpec(name="LGLp2")`; unnamed operators are available only through the
 structural lookup key.
 
-Affine element scaling for `[x_L, x_R]` with `h = x_R - x_L`:
-- `D = (2/h) D_ref`
-- `H = (h/2) H_ref`.
+Affine element scaling for `[x_L, x_R]`, `h = x_R - x_L`, and reference
+length `L_ref = interval[1] - interval[0]`:
+- `D = (L_ref/h) D_ref`
+- `H = (h/L_ref) H_ref`.
 
 `H` is diagonal and stored as a vector.
 

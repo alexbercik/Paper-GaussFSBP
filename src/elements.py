@@ -30,19 +30,26 @@ class Element1D:
     exact_left: float | None = None
 
 
-def map_reference_to_physical(xi: np.ndarray, xL: float, xR: float) -> np.ndarray:
-    xc = 0.5 * (xL + xR)
+def map_reference_to_physical(
+    xi: np.ndarray, xL: float, xR: float, interval: np.ndarray
+) -> np.ndarray:
+    reference_left = interval[0]
+    reference_length = interval[1] - interval[0]
     h = xR - xL
-    return xc + 0.5 * h * np.asarray(xi, dtype=float)
+    return xL + (h / reference_length) * (
+        np.asarray(xi, dtype=float) - reference_left
+    )
 
 
 def scale_operator_to_element(
     operator: Operator, xL: float, xR: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     h = xR - xL
-    x = map_reference_to_physical(operator.nodes, xL, xR)
-    D = (2.0 / h) * operator.D
-    H = (0.5 * h) * operator.H
+    reference_length = operator.interval[1] - operator.interval[0]
+    x = map_reference_to_physical(operator.nodes, xL, xR, operator.interval)
+    # Affine scaling uses the tabulated operator interval, not a fixed [-1, 1].
+    D = (reference_length / h) * operator.D
+    H = (h / reference_length) * operator.H
     H_inv = 1.0 / H
     return x, D, H, H_inv
 

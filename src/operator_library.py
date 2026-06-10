@@ -100,6 +100,7 @@ def _entry(
     quad_basis: list[str],
     op_type: str,
     selector: int,
+    interval: tuple[float, float] | list[float] | np.ndarray,
     nodes: np.ndarray,
     D: np.ndarray,
     H: np.ndarray,
@@ -112,6 +113,8 @@ def _entry(
         "quad_basis": quad_basis,
         "op_type": op_type,
         "selector": selector,
+        # Keep the reference interval explicit in each tabulated operator.
+        "interval": np.asarray(interval, dtype=float).copy(),
         "nodes": nodes,
         "D": D,
         "H": H,
@@ -127,6 +130,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3"],
         op_type="closed",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, 0.0, 1.0]),
         D=np.array(
             [
@@ -145,6 +149,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4", "x^5"],
         op_type="open",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-np.sqrt(3.0/5.0), 0.0, np.sqrt(3.0/5.0)]),
         D=np.array(
             [
@@ -163,6 +168,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4"],
         op_type="half-open-right",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, -0.2898979485566356, 0.6898979485566356]),
         D=np.array([
                         [-2.0, 2.4288690166235205, -0.4288690166235206],
@@ -179,6 +185,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4", "x^5", "x^6", "x^7"],
         op_type="open",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526]),
         D=np.array([
                         [-3.3320002363522816, 4.8601544156851961, -2.1087823484951791, 0.5806281691622645],
@@ -196,6 +203,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4", "x^5"],
         op_type="closed",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, -0.4472135954999579, 0.4472135954999579, 1.0]),
         D=np.array([
                         [-3.0, 4.0450849718747373, -1.545084971874737, 0.5],
@@ -213,6 +221,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4", "x^5", "x^6"],
         op_type="half-open-right",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, -0.5753189235216941, 0.1810662711185306, 0.8228240809745921]),
         D=np.array([
                         [-3.75, 4.7935967957376917, -1.3502656444120271, 0.3066688486743356],
@@ -230,6 +239,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "e^x", "x e^x", "x^2 e^x", "e^{2x}"],
         op_type="open",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-0.8425308036500644, -0.2778651467476725, 0.4000735152781082, 0.8782490795710493]),
         D=np.array([
                         [-2.9478805654298261, 4.2613237652942573, -1.7857948348726012, 0.4723516350081702],
@@ -247,6 +257,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4", "x^5", "e^x", "x e^x", "x^2 e^x", "e^{2x}"],
         op_type="open",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-0.8979508515330211, -0.5059974223007856, 0.0452992590334787, 0.5703118766229123, 0.914142595134012]),
         D=np.array([
                         [-3.9721395897622651, 5.1643767926805504, -1.3279874676202836, 0.051080465412216, 0.0846697992897825],
@@ -265,6 +276,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4", "x^5", "e^x", "x e^x", "x^2 e^x", "e^{2x}"],
         op_type="open",
         selector=1,
+        interval=(-1.0, 1.0),
         nodes=np.array([-0.8979508515330211, -0.5059974223007856, 0.0452992590334787, 0.5703118766229123, 0.914142595134012]),
         D=np.array([
                         [-4.4110421625764404, 6.3689870224972349, -2.8044670357917458, 1.1197654230372898, -0.2732432471663383],
@@ -283,6 +295,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "1/sqrt(1-x)", "x/sqrt(1-x)", "x^2/sqrt(1-x)"],
         op_type="half-open-right",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, -0.2597302979996616, 0.6508370907900723, 0.9833265234153543]),
         D=np.array([
                         [-2.0245897836466971, 2.6457101870376456, -0.8221177929890279, 0.2009973895966339],
@@ -300,6 +313,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4", "1/sqrt(1-x)", "x/sqrt(1-x)", "x^2/sqrt(1-x)"],
         op_type="open",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-0.7515992105845385, 0.0524697085059223, 0.7570646167026761, 0.9887923741992989]),
         D=np.array([
                         [-1.974781067551294, 2.9346324867448725, -1.3415335496316325, 0.3816821304377079],
@@ -317,6 +331,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "1/sqrt(1-x)", "x/sqrt(1-x)", "x^2/sqrt(1-x)"],
         op_type="half-open-right",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, 0.1680816411546915, 0.9519183588453085]),
         D=np.array([
                         [-1.0, 1.2144345083117603, -0.2144345083117603],
@@ -333,6 +348,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "1/sqrt(1-x)", "x/sqrt(1-x)", "x^2/sqrt(1-x)"],
         op_type="half-open-right",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, -0.2597302979994637, 0.6508370907903757, 0.9833265234154601]),
         D=np.array([
                         [-1.9160251471689218, 2.4281182497627749, -0.6562177267888575, 0.1441246241950045],
@@ -350,6 +366,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4", "1/sqrt(1-x)", "x/sqrt(1-x)", "x^2/sqrt(1-x)", "x^3/sqrt(1-x)"],
         op_type="half-open-right",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, -0.4893557343503926, 0.3062895017761031, 0.8419071261901024, 0.9932151597979015]),
         D=np.array([
                         [-3.045544725589981, 3.9570103518906672, -1.2607836999993693, 0.4622504992590605, -0.1129324255603776],
@@ -368,6 +385,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "1/sqrt(1-x)", "x/sqrt(1-x)", "x^2/sqrt(1-x)", "x^3/sqrt(1-x)", "x^4/sqrt(1-x)"],
         op_type="half-open-right",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, -0.4800261819876617, 0.3188444144949214, 0.8467158915995232, 0.9934782215722294]),
         D=np.array([
                         [-3.0, 3.9182394717123468, -1.2805599683378841, 0.482416677291199, -0.1200961806656619],
@@ -386,6 +404,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "x", "x^2", "x^3", "x^4", "1/sqrt(1-x)", "x/sqrt(1-x)", "x^2/sqrt(1-x)", "x^3/sqrt(1-x)", "x^4/sqrt(1-x)", "x^5/sqrt(1-x)"],
         op_type="half-open-right",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, -0.6252779830714585, 0.0326588889773979, 0.6163561311775322, 0.9215813726840237, 0.9968303505630832]),
         D=np.array([
                         [-4.375, 5.7781771029033422, -2.0235762748576067, 0.9014328703870168, -0.3799908258909944, 0.0989571274582418],
@@ -405,6 +424,7 @@ OPERATOR_ENTRIES: tuple[dict[str, Any], ...] = (
         quad_basis=["1", "sqrt(1-x)", "x", "x^2", "x^3", "x sqrt(1-x)", "x^2 sqrt(1-x)"],
         op_type="half-open-right",
         selector=0,
+        interval=(-1.0, 1.0),
         nodes=np.array([-1.0, -0.3689393849936914, 0.5, 0.9403679564222629]),
         D=np.array([
                         [-2.4750000000000001, 3.3077430354649988, -1.2, 0.3672569645350013],

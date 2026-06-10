@@ -11,6 +11,7 @@ REQUIRED_OPERATOR_KEYS = {
     "basis",
     "quad_basis",
     "op_type",
+    "interval",
     "nodes",
     "D",
     "H",
@@ -25,6 +26,7 @@ class Operator:
     basis: list[str]
     quad_basis: list[str]
     op_type: str
+    interval: np.ndarray
     nodes: np.ndarray
     D: np.ndarray
     H: np.ndarray
@@ -34,6 +36,7 @@ class Operator:
     name: str | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "interval", np.asarray(self.interval, dtype=float).copy())
         object.__setattr__(self, "nodes", np.asarray(self.nodes, dtype=float).copy())
         object.__setattr__(self, "D", np.asarray(self.D, dtype=float).copy())
         object.__setattr__(self, "H", np.asarray(self.H, dtype=float).copy())
@@ -50,6 +53,7 @@ class Operator:
             "basis": list(self.basis),
             "quad_basis": list(self.quad_basis),
             "op_type": self.op_type,
+            "interval": self.interval.copy(),
             "nodes": self.nodes.copy(),
             "D": self.D.copy(),
             "H": self.H.copy(),
@@ -71,6 +75,7 @@ def validate_operator_dict(operator_data: dict[str, Any]) -> None:
     quad_basis = operator_data["quad_basis"]
     op_type = operator_data["op_type"]
     selector = operator_data["selector"]
+    interval = np.asarray(operator_data["interval"], dtype=float)
     nodes = np.asarray(operator_data["nodes"], dtype=float)
     D = np.asarray(operator_data["D"], dtype=float)
     H = np.asarray(operator_data["H"], dtype=float)
@@ -90,6 +95,12 @@ def validate_operator_dict(operator_data: dict[str, Any]) -> None:
     if not isinstance(selector, int) or isinstance(selector, bool):
         raise TypeError("selector must be an integer")
 
+    if interval.ndim != 1 or interval.shape[0] != 2:
+        raise ValueError("interval must contain exactly two endpoints")
+    if not np.all(np.isfinite(interval)):
+        raise ValueError("interval endpoints must be finite")
+    if interval[1] <= interval[0]:
+        raise ValueError("interval must be strictly increasing")
     if nodes.ndim != 1:
         raise ValueError("nodes must be one-dimensional")
     if D.ndim != 2 or D.shape[0] != D.shape[1]:
