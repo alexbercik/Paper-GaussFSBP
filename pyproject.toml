@@ -18,10 +18,13 @@ dev = [
   "pytest>=8.0",
   "matplotlib>=3.8",
 ]
+julia = [
+  "juliacall>=0.9",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src"]
+include = ["src", "src.*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

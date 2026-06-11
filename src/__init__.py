@@ -20,11 +20,24 @@ from .norms import (
     global_L2_error,
     global_weighted_energy,
 )
-from .operator_library import OperatorSpec, all_operators, get_operator, selectors_for
+from .operator_library import (
+    OperatorSpec,
+    all_operators,
+    get_operator,
+    get_operator_by_name,
+    operator_names,
+    selectors_for,
+)
 from .operators import (
     Operator,
     check_sbp_property,
     validate_operator_dict,
+)
+from .lib import (
+    JuliaBasis,
+    JuliaOperatorError,
+    build_operator_from_julia,
+    build_julia_operator,
 )
 from .problems import Problem
 from .solve import concatenate_local_vectors, solve_steady, split_global_vector
@@ -34,9 +47,15 @@ __all__ = [
     "OperatorSpec",
     "all_operators",
     "get_operator",
+    "get_operator_by_name",
+    "operator_names",
     "selectors_for",
     "check_sbp_property",
     "validate_operator_dict",
+    "JuliaBasis",
+    "JuliaOperatorError",
+    "build_operator_from_julia",
+    "build_julia_operator",
     "Element1D",
     "make_elements",
     "make_uniform_elements",
