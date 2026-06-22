@@ -15,17 +15,28 @@ function export_exponential_operators(filename::String)
     cache = Dict{String, Any}()
     
    
-    alpha = 0.125*150
+    alpha = 4.0
 
     basis_3 = (x -> 1.0, x -> x, x -> exp(alpha * x))
-    nodes = [0.0, 0.25, 0.5, 0.75,1.0] 
+    reg_funcs = (x -> x^2, x -> x^3)
+    nodes = [0.0, 0.2, 0.4, 0.6,0.8, 1.0] 
 
-    source = GlaubitzIskeLampertÖffner2026Basic()
+    source = GlaubitzIskeLampertÖffner2026Regularized()
+    #source = GlaubitzIskeLampertÖffner2026Basic()
+
+    #= D_op = SummationByPartsOperatorsExtra.function_space_operator(
+        basis_3, 
+        nodes, 
+        source;
+        autodiff = ADTypes.AutoForwardDiff(),
+        verbose = true
+    ) =#
     
     D_op = SummationByPartsOperatorsExtra.function_space_operator(
         basis_3, 
         nodes, 
         source;
+        regularization_functions = reg_funcs,
         autodiff = ADTypes.AutoForwardDiff(),
         verbose = true
     )
