@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import importlib.util
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+import src.lib.julia_operators as julia_operators
 from src.lib.julia_operators import (
     JuliaBasis,
     _infer_op_type,
     build_operator_from_julia,
+    print_fsbp_operator_python,
 )
 from src.operator_library import get_operator
 from src.operators import Operator, check_sbp_property
@@ -61,6 +64,90 @@ def test_op_type_keyword_is_rejected_before_julia_loads() -> None:
 
     with pytest.raises(TypeError, match="op_type is inferred"):
         build_operator_from_julia(op_basis, quad_basis, op_type="open")
+
+
+def test_print_fsbp_operator_python_calls_julia_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    fake_fsbp = object()
+
+    def fake_print(fsbp: object, num_digits: int) -> None:
+        calls.append((fsbp, num_digits))
+
+    # juliacall helper names intentionally mirror the Julia functions.
+    fake_julia = SimpleNamespace(__pygaussfsbp_print_operator_python=fake_print)
+    monkeypatch.setattr(julia_operators, "_load_julia", lambda: fake_julia)
+
+    print_fsbp_operator_python(fake_fsbp, num_digits=16)
+
+    assert calls == [(fake_fsbp, 16)]
+
+
+def test_print_fsbp_operator_python_rejects_invalid_num_digits() -> None:
+    with pytest.raises(TypeError, match="num_digits must be an integer"):
+        print_fsbp_operator_python(object(), num_digits=True)
+    with pytest.raises(ValueError, match="num_digits must be nonnegative"):
+        print_fsbp_operator_python(object(), num_digits=-1)
+
+
+def test_build_operator_print_options_are_rejected_before_julia_loads() -> None:
+    op_basis, quad_basis = polynomial_bases()
+
+    with pytest.raises(TypeError, match="print_operator must be True or False"):
+        build_operator_from_julia(op_basis, quad_basis, print_operator=1)
+    with pytest.raises(ValueError, match="print_num_digits must be nonnegative"):
+        build_operator_from_julia(
+            op_basis,
+            quad_basis,
+            print_operator=True,
+            print_num_digits=-1,
+        )
+
+
+def test_build_kwargs_convert_all_strings_to_julia_symbols() -> None:
+    # Use an unlisted keyword to ensure conversion does not depend on a
+    # manually maintained allowlist of GaussFSBP options.
+    fake_julia = SimpleNamespace(
+        __pygaussfsbp_make_named_tuple=lambda keys, values: dict(zip(keys, values)),
+        Symbol=lambda value: ("symbol", value),
+    )
+
+    converted = julia_operators._make_named_tuple(
+        fake_julia,
+        {
+            "opt_method": "sequential",
+            "quad_kwargs": {
+                "future_option": ["first", "second"],
+            },
+        },
+    )
+
+    assert converted == {
+        "opt_method": ("symbol", "sequential"),
+        "quad_kwargs": {
+            "future_option": [("symbol", "first"), ("symbol", "second")],
+        },
+    }
+
+
+def test_function_expression_kwargs_are_not_converted_to_symbols() -> None:
+    calls = []
+
+    # Function-expression keywords remain Julia callables rather than symbols.
+    fake_julia = SimpleNamespace(
+        __pygaussfsbp_parse_function=lambda value: calls.append(("one", value)),
+        __pygaussfsbp_parse_functions=lambda values: calls.append(("many", values)),
+        Symbol=lambda value: ("symbol", value),
+    )
+
+    julia_operators._convert_julia_value(fake_julia, "measure", "x -> exp(-x^2)")
+    julia_operators._convert_julia_value(
+        fake_julia, "test_functions", ["x -> sin(x)", "x -> cos(x)"]
+    )
+
+    assert calls == [
+        ("one", "x -> exp(-x^2)"),
+        ("many", ["x -> sin(x)", "x -> cos(x)"]),
+    ]
 
 
 @requires_juliacall

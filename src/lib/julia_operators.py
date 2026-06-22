@@ -61,7 +61,8 @@ def build_julia_operator(
     """Build and return the raw Julia `FSBPOperator`.
 
     `build_kwargs` are converted to Julia values and forwarded directly to
-    `GaussFSBP.build_fsbp_operator`.
+    `GaussFSBP.build_fsbp_operator`. Python strings become Julia `Symbol`s,
+    except for keywords that explicitly contain Julia function expressions.
     """
 
     if not isinstance(op_basis, JuliaBasis) or not isinstance(quad_basis, JuliaBasis):
@@ -86,6 +87,17 @@ def build_julia_operator(
     )
 
 
+def print_fsbp_operator_python(fsbp: Any, *, num_digits: int = 5) -> None:
+    """Print a Julia `FSBPOperator` using GaussFSBP's Python/NumPy format."""
+
+    num_digits = _normalize_num_digits(num_digits)
+    jl = _load_julia()
+
+    # Keep the export formatting owned by GaussFSBP so direct Julia and Python
+    # calls print the same literals.
+    jl.__pygaussfsbp_print_operator_python(fsbp, num_digits)
+
+
 def build_operator_from_julia(
     op_basis: JuliaBasis,
     quad_basis: JuliaBasis,
@@ -93,13 +105,23 @@ def build_operator_from_julia(
     interval: tuple[float, float] = (-1.0, 1.0),
     precision: str = "float64",
     digits: int | None = None,
+    print_operator: bool = False,
+    print_num_digits: int = 5,
     **build_kwargs: Any,
 ) -> Operator:
     """Build a Julia FSBP operator and convert it to this package's `Operator`.
 
     The returned data are copied directly from Julia: no interval normalization,
     rescaling, renaming, or selector selection is applied.
+
+    String-valued `build_kwargs` are passed as Julia `Symbol`s, so optimization
+    choices can be written naturally in Python, for example
+    `opt_method="sequential"`.
     """
+    if not isinstance(print_operator, bool):
+        raise TypeError("print_operator must be True or False")
+    if print_operator:
+        print_num_digits = _normalize_num_digits(print_num_digits, "print_num_digits")
     if "op_type" in build_kwargs:
         raise TypeError("op_type is inferred from quad_basis length and principal")
     op_type = _infer_op_type(quad_basis, build_kwargs.get("principal", "lower"))
@@ -112,6 +134,9 @@ def build_operator_from_julia(
         digits=digits,
         **build_kwargs,
     )
+    if print_operator:
+        print_fsbp_operator_python(fsbp, num_digits=print_num_digits)
+
     jl = _load_julia()
     interval, nodes, D, H, tL, tR = jl.__pygaussfsbp_operator_arrays(fsbp)
 
@@ -163,6 +188,14 @@ def _normalize_precision(precision: str, digits: int | None) -> tuple[str, int]:
             raise ValueError("digits must be a positive integer")
         return precision_key, digits
     raise ValueError("precision must be 'float64' or 'bigfloat'")
+
+
+def _normalize_num_digits(num_digits: int, field_name: str = "num_digits") -> int:
+    if not isinstance(num_digits, int) or isinstance(num_digits, bool):
+        raise TypeError(f"{field_name} must be an integer")
+    if num_digits < 0:
+        raise ValueError(f"{field_name} must be nonnegative")
+    return num_digits
 
 
 def _load_julia() -> Any:
@@ -264,6 +297,11 @@ function __pygaussfsbp_operator_arrays(op)
         Float64.(op.tR),
     )
 end
+
+function __pygaussfsbp_print_operator_python(op, num_digits)
+    return Base.invokelatest(GaussFSBP.print_fsbp_operator_python,
+                             op; num_digits=Int(num_digits))
+end
 """
     )
     _HELPERS_READY = True
@@ -285,7 +323,9 @@ def _convert_julia_value(jl: Any, key: Any, value: Any) -> Any:
         return jl.__pygaussfsbp_parse_functions(list(value))
     if key_name == "measure":
         return jl.__pygaussfsbp_parse_function(value)
-    if isinstance(value, str) and key_name in _SYMBOL_KWARGS:
+    # GaussFSBP uses symbols for named choices. Function expressions are parsed
+    # above, so every remaining Python string can safely follow that convention.
+    if isinstance(value, str):
         return jl.Symbol(value)
     if isinstance(value, tuple):
         return tuple(_convert_julia_value(jl, key_name, item) for item in value)
@@ -318,15 +358,3 @@ def _principal_key(principal: Any) -> str:
     if key not in {"upper", "lower"}:
         raise ValueError("principal must be 'upper' or 'lower'")
     return key
-
-
-_SYMBOL_KWARGS = {
-    "principal",
-    "add_endpoint",
-    "extrapolation_norm",
-    "derivative_error_norm",
-    "zero_boundary_scaling",
-    "extrapolation_symmetry",
-    "compatibility_action",
-    "opt_method",
-}

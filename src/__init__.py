@@ -38,6 +38,7 @@ from .lib import (
     JuliaOperatorError,
     build_operator_from_julia,
     build_julia_operator,
+    print_fsbp_operator_python,
 )
 from .problems import Problem
 from .solve import concatenate_local_vectors, solve_steady, split_global_vector
@@ -56,6 +57,7 @@ __all__ = [
     "JuliaOperatorError",
     "build_operator_from_julia",
     "build_julia_operator",
+    "print_fsbp_operator_python",
     "Element1D",
     "make_elements",
     "make_uniform_elements",
