@@ -69,7 +69,7 @@ def main() -> None:
         precision="bigfloat",
         digits=32,
         orthogonalize=True,
-        principal="lower",
+        principal="upper",
     )
 
     print(f"nodes = {operator.nodes}")
