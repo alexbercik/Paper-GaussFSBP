@@ -124,7 +124,41 @@ def canonical_basis_key(basis: list[str]) -> tuple[str, ...]:
     return tuple(sorted(basis))
 
 
-def check_sbp_property(operator: Operator, tol: float = 1e-12) -> bool:
+def check_sbp_property(
+    operator: Operator, tol: float = 1e-12, *, print_report: bool = False
+) -> bool:
     HD = operator.H[:, None] * operator.D
     residual = HD + HD.T - operator.boundary_matrix()
-    return float(np.linalg.norm(residual, ord=np.inf)) <= tol
+    residual_norm = float(np.linalg.norm(residual, ord=np.inf))
+    if residual_norm <= tol:
+        return True
+    if print_report:
+        i, j = np.unravel_index(np.argmax(np.abs(residual)), residual.shape)
+        print(
+            "SBP check failed\n"
+            f"  ||HD + (HD)^T - B||_inf = {residual_norm:.6e} (tol = {tol:.6e})\n"
+            f"  largest entry: residual[{i}, {j}] = {residual[i, j]:.6e}",
+            flush=True,
+        )
+    return False
+
+
+def check_nullspace_consistency(
+    operator: Operator, *, print_report: bool = False, tol: float | None = None
+) -> bool:
+    D = operator.D
+    n = D.shape[0]
+    if D.shape != (n, n):
+        raise ValueError("D must be square")
+    expected_rank = n - 1
+    rank_kwargs = {"tol": tol} if tol is not None else {}
+    rank = int(np.linalg.matrix_rank(D, **rank_kwargs))
+    if rank == expected_rank:
+        return True
+    if print_report:
+        print(
+            "Operator D is not nullspace consistent\n"
+            f"  matrix rank = {rank} (expected {expected_rank})",
+            flush=True,
+        )
+    return False

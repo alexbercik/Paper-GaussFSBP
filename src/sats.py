@@ -12,7 +12,7 @@ BlockDict = dict[tuple[int, int], np.ndarray]
 
 def _flux_coefficients(sat_type: str) -> tuple[float, float]:
     """Coefficients in ``f* = cL * left_flux_state + cR * right_flux_state``."""
-    if sat_type == "symmetric":
+    if sat_type in {"symmetric", "central"}:
         return 0.5, 0.5
     if sat_type in {"upwind", "rusanov"}:
         return 1.0, 0.0
