@@ -12,7 +12,7 @@ def exponential_bases(epsilon: float) -> tuple[JuliaBasis, JuliaBasis]:
     # Keep epsilon in Python, then insert its decimal text into trusted Julia
     # callable strings. BigFloat(...) keeps the constant type-friendly when the
     # Julia operator is built in BigFloat precision.
-    eps = f'BigFloat("{format(epsilon, "g")}")'
+    eps = f'BigFloat("{repr(epsilon)}")'
     exp_eps = f"x -> exp(x) / {eps}"
 
     op_basis = JuliaBasis(
@@ -69,11 +69,13 @@ def main() -> None:
         precision="bigfloat",
         digits=32,
         orthogonalize=True,
-        principal="lower",
+        principal="upper",
+        print_operator=True,
+        print_num_digits=16,
     )
 
-    print(f"nodes = {operator.nodes}")
-    print(f"weights = {operator.H}")
+    #print(f"nodes = {operator.nodes}")
+    #print(f"weights = {operator.H}")
     print(f"SBP check passed: {check_sbp_property(operator, tol=1e-9)}")
 
     elements = make_uniform_elements(

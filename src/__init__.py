@@ -30,6 +30,7 @@ from .operator_library import (
 )
 from .operators import (
     Operator,
+    check_nullspace_consistency,
     check_sbp_property,
     validate_operator_dict,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "get_operator_by_name",
     "operator_names",
     "selectors_for",
+    "check_nullspace_consistency",
     "check_sbp_property",
     "validate_operator_dict",
     "JuliaBasis",
