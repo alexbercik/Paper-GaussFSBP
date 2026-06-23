@@ -3,4 +3,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 .venv/
+.DS_Store
+.env
+.vscode/
 src/lib/GaussFSBP

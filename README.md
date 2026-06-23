@@ -139,3 +139,14 @@ python -m pip install -e ".[dev]"
 pytest -q
 python examples/smooth_sanity_check.py
 ```
+
+## Julia operator builders
+
+The optional Julia-backed operator builders use one shared Julia environment at
+`src/lib/julia`. Keep `src/lib/GaussFSBP` as a local symlink to the GaussFSBP
+Julia checkout, then instantiate the shared environment:
+
+```bash
+julia --project=src/lib/julia -e 'import Pkg; Pkg.instantiate()'
+julia --project=src/lib/julia -e 'using GaussFSBP, SummationByPartsOperatorsExtra'
+```

@@ -1,6 +1,5 @@
 using Pkg
-Pkg.activate(@__DIR__)
-Pkg.develop(path="/Users/lisa/grad/phd/proj/SummationByPartsOperatorsExtra.jl")
+Pkg.activate(joinpath(@__DIR__, "..", "src", "lib", "julia"))
 
 using JSON
 using LinearAlgebra
@@ -13,28 +12,19 @@ import ADTypes
 
 function export_exponential_operators(filename::String)
     cache = Dict{String, Any}()
-    
-   
+
     alpha = 4.0
 
     basis_3 = (x -> 1.0, x -> x, x -> exp(alpha * x))
     reg_funcs = (x -> x^2, x -> x^3)
-    nodes = [0.0, 0.2, 0.4, 0.6,0.8, 1.0] 
+    nodes = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
     source = GlaubitzIskeLampertÖffner2026Regularized()
     #source = GlaubitzIskeLampertÖffner2026Basic()
 
-    #= D_op = SummationByPartsOperatorsExtra.function_space_operator(
-        basis_3, 
-        nodes, 
-        source;
-        autodiff = ADTypes.AutoForwardDiff(),
-        verbose = true
-    ) =#
-    
     D_op = SummationByPartsOperatorsExtra.function_space_operator(
-        basis_3, 
-        nodes, 
+        basis_3,
+        nodes,
         source;
         regularization_functions = reg_funcs,
         autodiff = ADTypes.AutoForwardDiff(),
@@ -66,7 +56,7 @@ function export_exponential_operators(filename::String)
         JSON.print(f, cache, 4)
     end
     
-    println("Successfully exported operator cache to ", joinpath(@__DIR__, filename))
+    println("Successfully exported operator cache to ", filename)
 end
 
-export_exponential_operators("/Users/lisa/grad/phd/proj/Paper-GaussFSBP/examples/operator_cache_lampert.json")
+export_exponential_operators(joinpath(@__DIR__, "operator_cache_lampert.json"))

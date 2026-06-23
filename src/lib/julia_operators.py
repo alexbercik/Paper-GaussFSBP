@@ -8,10 +8,10 @@ import os
 
 import numpy as np
 
-from ..operators import Operator
+from ..operators import Operator, VALID_OP_TYPES
 
 
-_JULIA_PROJECT = Path(__file__).parent.joinpath("GaussFSBP")
+_JULIA_PROJECT = Path(__file__).parent.joinpath("julia")
 _JL: Any | None = None
 _HELPERS_READY = False
 _TEST_SPEC_KEYS = frozenset({"test_functions", "test_derivatives"})
@@ -248,12 +248,101 @@ def build_operator_from_julia(
     )
 
 
+def build_operator_from_sbp_extra(
+    functions: Sequence[str],
+    nodes: Sequence[float],
+    *,
+    basis_labels: Sequence[str],
+    quad_basis_labels: Sequence[str],
+    op_type: str,
+    interval: tuple[float, float] = (0.0, 1.0),
+    source: str = "regularized",
+    regularization_functions: Sequence[str] = (),
+    selector: int = 0,
+    name: str | None = None,
+    autodiff: str = "forwarddiff",
+    verbose: bool = False,
+) -> Operator:
+    """Build an operator with `SummationByPartsOperatorsExtra.jl`.
+
+    The function strings are trusted Julia callable expressions. `source`
+    accepts the short selectors `"regularized"` and `"basic"`, or an exported
+    constructor name from `SummationByPartsOperatorsExtra`.
+    """
+
+    functions = _as_string_tuple(functions, "functions")
+    basis_labels = _as_string_tuple(basis_labels, "basis_labels")
+    quad_basis_labels = _as_string_tuple(quad_basis_labels, "quad_basis_labels")
+    regularization_functions = _as_string_tuple(
+        regularization_functions, "regularization_functions"
+    )
+    if len(functions) != len(basis_labels):
+        raise ValueError("functions and basis_labels must have the same length")
+    if not quad_basis_labels:
+        raise ValueError("quad_basis_labels must not be empty")
+    if op_type not in VALID_OP_TYPES:
+        raise ValueError(f"Invalid op_type '{op_type}'")
+    if not isinstance(selector, int) or isinstance(selector, bool):
+        raise TypeError("selector must be an integer")
+    if name is not None and not isinstance(name, str):
+        raise TypeError("name must be a string or None")
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("source must be a nonempty string")
+    if not isinstance(autodiff, str) or not autodiff.strip():
+        raise ValueError("autodiff must be a nonempty string")
+    if not isinstance(verbose, bool):
+        raise TypeError("verbose must be True or False")
+
+    interval = _normalize_interval(interval)
+    node_values = _as_float_vector(nodes, "nodes")
+    jl = _load_julia()
+    sbp_operator = jl.__pygaussfsbp_extra_operator(
+        list(functions),
+        node_values.tolist(),
+        source,
+        list(regularization_functions),
+        autodiff,
+        verbose,
+    )
+    D, H, tL, tR = jl.__pygaussfsbp_extra_operator_arrays(sbp_operator)
+
+    return Operator(
+        name=name,
+        basis=list(basis_labels),
+        quad_basis=list(quad_basis_labels),
+        op_type=op_type,
+        selector=selector,
+        interval=np.asarray(interval, dtype=float),
+        nodes=node_values,
+        D=np.asarray(D, dtype=float),
+        H=np.asarray(H, dtype=float),
+        tL=np.asarray(tL, dtype=float),
+        tR=np.asarray(tR, dtype=float),
+    )
+
+
 def _as_string_tuple(values: Sequence[str], field_name: str) -> tuple[str, ...]:
     if isinstance(values, str) or not isinstance(values, Sequence):
         raise TypeError(f"{field_name} must be a sequence of strings")
     if any(not isinstance(value, str) for value in values):
         raise TypeError(f"{field_name} must contain only strings")
     return tuple(values)
+
+
+def _as_float_vector(values: Sequence[float], field_name: str) -> np.ndarray:
+    if isinstance(values, str):
+        raise TypeError(f"{field_name} must be a sequence of numbers")
+    try:
+        array = np.asarray(values, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{field_name} must be a sequence of numbers") from exc
+    if array.ndim != 1:
+        raise ValueError(f"{field_name} must be one-dimensional")
+    if array.size == 0:
+        raise ValueError(f"{field_name} must not be empty")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{field_name} entries must be finite")
+    return array
 
 
 def _normalize_interval(interval: tuple[float, float]) -> tuple[float, float]:
@@ -324,7 +413,18 @@ def _load_julia() -> Any:
 
     jl.seval("import Pkg")
     jl.Pkg.activate(str(project))
-    jl.seval("using GaussFSBP")
+    jl.seval(
+        """
+using LinearAlgebra
+using GaussFSBP
+using ADTypes
+using ForwardDiff
+using Manifolds
+using Manopt
+using SummationByPartsOperators
+using SummationByPartsOperatorsExtra
+"""
+    )
     _define_julia_helpers(jl)
     _JL = jl
     return jl
@@ -497,6 +597,61 @@ end
 function __pygaussfsbp_print_operator_python(op, num_digits)
     return Base.invokelatest(GaussFSBP.print_fsbp_operator_python,
                              op; num_digits=Int(num_digits))
+end
+
+function __pygaussfsbp_extra_source(source_name)
+    key = Symbol(String(source_name))
+    if key === :regularized
+        return getfield(
+            SummationByPartsOperatorsExtra,
+            Symbol("GlaubitzIskeLampert\u00d6ffner2026Regularized"),
+        )()
+    elseif key === :basic
+        return getfield(
+            SummationByPartsOperatorsExtra,
+            Symbol("GlaubitzIskeLampert\u00d6ffner2026Basic"),
+        )()
+    end
+    return getfield(SummationByPartsOperatorsExtra, key)()
+end
+
+function __pygaussfsbp_extra_autodiff(autodiff_name)
+    key = Symbol(String(autodiff_name))
+    if key === :forwarddiff
+        return ADTypes.AutoForwardDiff()
+    end
+    throw(ArgumentError("unsupported autodiff selector: $(autodiff_name)"))
+end
+
+function __pygaussfsbp_extra_operator(func_exprs, nodes, source_name,
+                                      regularization_exprs, autodiff_name,
+                                      verbose)
+    funcs = Tuple(__pygaussfsbp_parse_functions(func_exprs))
+    source = __pygaussfsbp_extra_source(source_name)
+    kwargs = Pair{Symbol, Any}[
+        :autodiff => __pygaussfsbp_extra_autodiff(autodiff_name),
+        :verbose => Bool(verbose),
+    ]
+    if !isempty(regularization_exprs)
+        reg_funcs = Tuple(__pygaussfsbp_parse_functions(regularization_exprs))
+        push!(kwargs, :regularization_functions => reg_funcs)
+    end
+    return Base.invokelatest(
+        SummationByPartsOperatorsExtra.function_space_operator,
+        funcs,
+        Float64.(collect(nodes)),
+        source;
+        NamedTuple(kwargs)...,
+    )
+end
+
+function __pygaussfsbp_extra_operator_arrays(op)
+    return (
+        Array{Float64}(Matrix(op)),
+        Float64.(diag(SummationByPartsOperators.mass_matrix(op))),
+        Float64.(SummationByPartsOperators.left_boundary_weight(op)),
+        Float64.(SummationByPartsOperators.right_boundary_weight(op)),
+    )
 end
 
 const __pygaussfsbp_true = true

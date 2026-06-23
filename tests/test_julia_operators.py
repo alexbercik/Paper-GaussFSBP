@@ -11,6 +11,7 @@ from src.lib.julia_operators import (
     JuliaBasis,
     _infer_op_type,
     build_operator_from_julia,
+    build_operator_from_sbp_extra,
     legendre_basis_factory,
     print_fsbp_operator_python,
 )
@@ -154,6 +155,83 @@ def test_build_operator_print_options_are_rejected_before_julia_loads() -> None:
             quad_basis,
             print_operator=True,
             print_num_digits=-1,
+        )
+
+
+def test_build_operator_from_sbp_extra_converts_arrays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_operator = object()
+    calls = []
+
+    def fake_build(
+        functions: list[str],
+        nodes: list[float],
+        source: str,
+        regularization_functions: list[str],
+        autodiff: str,
+        verbose: bool,
+    ) -> object:
+        calls.append(
+            (functions, nodes, source, regularization_functions, autodiff, verbose)
+        )
+        return fake_operator
+
+    fake_julia = SimpleNamespace(
+        __pygaussfsbp_extra_operator=fake_build,
+        __pygaussfsbp_extra_operator_arrays=lambda op: (
+            [[-5.0, 5.0], [-5.0, 5.0]],
+            [0.1, 0.1],
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ),
+    )
+    monkeypatch.setattr(julia_operators, "_load_julia", lambda: fake_julia)
+
+    built = build_operator_from_sbp_extra(
+        ["x -> one(x)", "x -> x"],
+        [0.0, 0.2],
+        basis_labels=["1", "x"],
+        quad_basis_labels=["1", "x", "x^2"],
+        op_type="closed",
+        interval=(0.0, 0.2),
+        source="basic",
+        regularization_functions=["x -> x^2"],
+        verbose=True,
+    )
+
+    assert calls == [
+        (
+            ["x -> one(x)", "x -> x"],
+            [0.0, 0.2],
+            "basic",
+            ["x -> x^2"],
+            "forwarddiff",
+            True,
+        )
+    ]
+    assert isinstance(built, Operator)
+    assert built.basis == ["1", "x"]
+    assert built.quad_basis == ["1", "x", "x^2"]
+    np.testing.assert_allclose(built.nodes, [0.0, 0.2])
+
+
+def test_build_operator_from_sbp_extra_validates_before_julia_loads() -> None:
+    with pytest.raises(ValueError, match="functions and basis_labels"):
+        build_operator_from_sbp_extra(
+            ["x -> one(x)"],
+            [0.0],
+            basis_labels=["1", "x"],
+            quad_basis_labels=["1"],
+            op_type="closed",
+        )
+    with pytest.raises(ValueError, match="Invalid op_type"):
+        build_operator_from_sbp_extra(
+            ["x -> one(x)"],
+            [0.0],
+            basis_labels=["1"],
+            quad_basis_labels=["1"],
+            op_type="bad",
         )
 
 

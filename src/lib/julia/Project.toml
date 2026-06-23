@@ -1,0 +1,16 @@
+[deps]
+ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+GaussFSBP = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+GeneralizedGauss = "05e31603-d96d-5828-bb71-68ab99de2396"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Manifolds = "1cead3c2-87b3-11e9-0ccd-23c62b72b94e"
+Manopt = "0fc0a36d-df90-57f3-8f93-d78a9fc72bb5"
+SummationByPartsOperators = "9f78cca6-572e-554e-b819-917d2f1cf240"
+SummationByPartsOperatorsExtra = "213abaa5-c2d1-49c7-a86b-a2b7aa43ec15"
+
+[sources]
+GaussFSBP = {path = "../GaussFSBP"}
+GeneralizedGauss = {path = "../GaussFSBP/lib/GeneralizedGauss.jl"}
+SummationByPartsOperatorsExtra = {url = "https://github.com/JoshuaLampert/SummationByPartsOperatorsExtra.jl"}
