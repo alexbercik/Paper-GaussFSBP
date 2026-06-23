@@ -14,6 +14,10 @@ from ..operators import Operator
 _JULIA_PROJECT = Path(__file__).parent.joinpath("GaussFSBP")
 _JL: Any | None = None
 _HELPERS_READY = False
+_TEST_SPEC_KEYS = frozenset({"test_functions", "test_derivatives"})
+_OBJECTIVE_WEIGHT_KEYS = frozenset(
+    {"extrapolation_objective_weights", "S_objective_weights"}
+)
 
 
 class JuliaOperatorError(RuntimeError):
@@ -22,18 +26,39 @@ class JuliaOperatorError(RuntimeError):
 
 @dataclass(frozen=True)
 class JuliaBasis:
-    """String-backed basis definition for Julia's `FunctionBasis`.
+    """String- or factory-backed definition for Julia's `FunctionBasis`.
 
-    The callable strings are trusted Julia expressions that evaluate to unary
-    functions, for example `x -> one(x)`, `x -> x^2`, or `x -> exp(x) / 0.1`.
+    Pass either individual trusted Julia callable expressions in `functions`
+    and `derivatives`, or one trusted `factory` expression. A factory must
+    evaluate to a function that accepts the typed interval and returns
+    `(functions, derivatives)`.
     """
 
     labels: Sequence[str]
-    functions: Sequence[str]
+    functions: Sequence[str] | None = None
     derivatives: Sequence[str] | None = None
+    factory: str | None = None
 
     def __post_init__(self) -> None:
         labels = _as_string_tuple(self.labels, "labels")
+        factory = self.factory
+        if factory is not None:
+            if not isinstance(factory, str):
+                raise TypeError("factory must be a string or None")
+            if not factory.strip():
+                raise ValueError("factory must not be empty")
+            if self.functions is not None or self.derivatives is not None:
+                raise ValueError(
+                    "factory cannot be combined with functions or derivatives"
+                )
+
+            object.__setattr__(self, "labels", labels)
+            object.__setattr__(self, "functions", None)
+            object.__setattr__(self, "derivatives", None)
+            return
+
+        if self.functions is None:
+            raise ValueError("functions are required when factory is not provided")
         functions = _as_string_tuple(self.functions, "functions")
         if len(labels) != len(functions):
             raise ValueError("labels and functions must have the same length")
@@ -49,6 +74,55 @@ class JuliaBasis:
         object.__setattr__(self, "derivatives", derivatives)
 
 
+def legendre_basis_factory(
+    num_polynomials: int,
+    *,
+    additional_functions: Sequence[str] = (),
+    additional_derivatives: Sequence[str] = (),
+) -> str:
+    """Return a Julia factory that preserves Legendre's shared cache block.
+
+    Additional entries are trusted Julia expressions evaluated in a scope
+    containing `T`, the scalar type of the interval. This allows typed
+    constants such as `parse(T, "0.1")` to be captured once by each callable.
+    """
+    if (
+        not isinstance(num_polynomials, int)
+        or isinstance(num_polynomials, bool)
+        or num_polynomials < 0
+    ):
+        raise ValueError("num_polynomials must be a nonnegative integer")
+
+    extra_functions = _as_string_tuple(
+        additional_functions, "additional_functions"
+    )
+    extra_derivatives = _as_string_tuple(
+        additional_derivatives, "additional_derivatives"
+    )
+    if len(extra_functions) != len(extra_derivatives):
+        raise ValueError(
+            "additional_functions and additional_derivatives must have the same length"
+        )
+
+    function_entries = ",\n        ".join(extra_functions)
+    derivative_entries = ",\n        ".join(extra_derivatives)
+    return f"""interval -> begin
+    polynomial_functions, polynomial_derivatives =
+        GaussFSBP.legendre_functions({num_polynomials}, interval)
+    T = typeof(interval[1])
+    extra_functions = Function[
+        {function_entries}
+    ]
+    extra_derivatives = Function[
+        {derivative_entries}
+    ]
+    return (
+        vcat(polynomial_functions, extra_functions),
+        vcat(polynomial_derivatives, extra_derivatives),
+    )
+end"""
+
+
 def build_julia_operator(
     op_basis: JuliaBasis,
     quad_basis: JuliaBasis,
@@ -62,24 +136,29 @@ def build_julia_operator(
 
     `build_kwargs` are converted to Julia values and forwarded directly to
     `GaussFSBP.build_fsbp_operator`. Python strings become Julia `Symbol`s,
-    except for keywords that explicitly contain Julia function expressions.
+    Python booleans become Julia `Bool`s, except for keywords that explicitly
+    contain Julia function expressions.
     """
 
     if not isinstance(op_basis, JuliaBasis) or not isinstance(quad_basis, JuliaBasis):
         raise TypeError("op_basis and quad_basis must be JuliaBasis instances")
 
     precision, digits = _normalize_precision(precision, digits)
-    interval_values = _normalize_interval(interval)
+    interval_values = _interval_values_for_julia(interval, precision)
     jl = _load_julia()
     kwargs = _make_named_tuple(jl, build_kwargs)
 
     return jl.__pygaussfsbp_build_from_strings(
-        list(op_basis.functions),
+        list(op_basis.functions or ()),
         list(op_basis.derivatives or ()),
         op_basis.derivatives is not None,
-        list(quad_basis.functions),
+        op_basis.factory or "",
+        len(op_basis.labels),
+        list(quad_basis.functions or ()),
         list(quad_basis.derivatives or ()),
         quad_basis.derivatives is not None,
+        quad_basis.factory or "",
+        len(quad_basis.labels),
         list(interval_values),
         precision,
         digits,
@@ -114,9 +193,23 @@ def build_operator_from_julia(
     The returned data are copied directly from Julia: no interval normalization,
     rescaling, renaming, or selector selection is applied.
 
-    String-valued `build_kwargs` are passed as Julia `Symbol`s, so optimization
-    choices can be written naturally in Python, for example
-    `opt_method="sequential"`.
+    String- and boolean-valued `build_kwargs` are converted to Julia `Symbol`s
+    and `Bool`s, so optimization choices can be written naturally in Python,
+    for example `opt_method="sequential"`.
+
+    The ``interval`` argument sets the reference domain passed to Julia
+    ``legendre_functions``, each basis factory, and ``FunctionBasis(...;
+    interval=...)``. For ``precision='bigfloat'``, endpoints are forwarded with
+    ``repr`` so Julia can parse them at the requested precision.
+
+    Optimization test functions accept either one Julia vector expression string
+    such as ``"[x -> sin(x), x -> cos(x)]"`` or a Python list/tuple of
+    per-function expression strings. They are resolved in typed Julia scope only
+    when ``use_optimization=True``.
+
+    Objective weights accept a length-2 list/tuple ``[accuracy, norm]``, a
+    mapping ``{"accuracy": ..., "norm": ...}``, or an already-formed Julia
+    named tuple.
     """
     if not isinstance(print_operator, bool):
         raise TypeError("print_operator must be True or False")
@@ -173,6 +266,17 @@ def _normalize_interval(interval: tuple[float, float]) -> tuple[float, float]:
     if b <= a:
         raise ValueError("interval must be strictly increasing")
     return a, b
+
+
+def _interval_values_for_julia(
+    interval: tuple[float, float], precision: str
+) -> list[str] | list[float]:
+    """Return interval endpoints in the form expected by the Julia build helpers."""
+    a, b = _normalize_interval(interval)
+    if precision == "bigfloat":
+        # repr preserves the decimal text of Python floats for BigFloat parsing.
+        return [repr(a), repr(b)]
+    return [a, b]
 
 
 def _normalize_precision(precision: str, digits: int | None) -> tuple[str, int]:
@@ -253,33 +357,125 @@ function __pygaussfsbp_parse_function(expr)
     return funcs[1]
 end
 
+function __pygaussfsbp_eval_module(::Type{T}) where {T}
+    m = Module()
+    Core.eval(m, :(const T = $T))
+    return m
+end
+
+function __pygaussfsbp_parse_functions_in_module(exprs, m::Module)
+    funcs = Function[]
+    for expr in exprs
+        value = Core.eval(m, Meta.parse(String(expr)))
+        value isa Function || throw(ArgumentError(
+            "Julia expression must evaluate to a function: $(expr)"))
+        push!(funcs, value)
+    end
+    return funcs
+end
+
+function __pygaussfsbp_resolve_test_spec(spec, ::Type{T}) where {T}
+    m = __pygaussfsbp_eval_module(T)
+    if spec isa AbstractString
+        result = Core.eval(m, Meta.parse(String(spec)))
+        result isa AbstractVector || throw(ArgumentError(
+            "test spec string must evaluate to a function vector"))
+        funcs = Function[]
+        for value in result
+            value isa Function || throw(ArgumentError(
+                "test spec vector must contain only functions"))
+            push!(funcs, value)
+        end
+        return funcs
+    end
+    return __pygaussfsbp_parse_functions_in_module(collect(spec), m)
+end
+
+function __pygaussfsbp_resolve_optimization_kwargs(kwargs, ::Type{T}) where {T}
+    use_opt = get(kwargs, :use_optimization, false)
+    use_opt || return kwargs
+
+    updates = Pair{Symbol, Any}[]
+    if haskey(kwargs, :test_functions)
+        push!(updates, :test_functions =>
+            __pygaussfsbp_resolve_test_spec(kwargs.test_functions, T))
+    end
+    if haskey(kwargs, :test_derivatives)
+        push!(updates, :test_derivatives =>
+            __pygaussfsbp_resolve_test_spec(kwargs.test_derivatives, T))
+    end
+    isempty(updates) && return kwargs
+
+    resolved = merge(kwargs, NamedTuple(updates))
+    if haskey(resolved, :test_functions) && haskey(resolved, :test_derivatives)
+        length(resolved.test_functions) == length(resolved.test_derivatives) ||
+            throw(ArgumentError(
+                "test_derivatives must have the same length as test_functions"))
+    end
+    return resolved
+end
+
+function __pygaussfsbp_parse_basis(func_exprs, deriv_exprs, has_derivs,
+                                    factory_expr, interval, expected_length)
+    if !isempty(String(factory_expr))
+        factory = eval(Meta.parse(String(factory_expr)))
+        factory isa Function || throw(ArgumentError(
+            "Julia basis factory expression must evaluate to a function."))
+        result = Base.invokelatest(factory, interval)
+        result isa Tuple && length(result) == 2 || throw(ArgumentError(
+            "Julia basis factory must return (functions, derivatives)."))
+        funcs = Function[collect(result[1])...]
+        derivs = Function[collect(result[2])...]
+    else
+        funcs = __pygaussfsbp_parse_functions(func_exprs)
+        derivs = has_derivs ? __pygaussfsbp_parse_functions(deriv_exprs) : nothing
+    end
+
+    length(funcs) == expected_length || throw(ArgumentError(
+        "Julia basis produced $(length(funcs)) functions; expected $(expected_length)."))
+    if derivs !== nothing
+        length(derivs) == expected_length || throw(ArgumentError(
+            "Julia basis produced $(length(derivs)) derivatives; expected $(expected_length)."))
+    end
+    return funcs, derivs
+end
+
 function __pygaussfsbp_build_with_type(op_funcs, op_derivs, op_has_derivs,
+                                       op_factory, op_length,
                                        quad_funcs, quad_derivs, quad_has_derivs,
+                                       quad_factory, quad_length,
                                        interval_values, ::Type{T}, kwargs) where {T}
     a = T === BigFloat ? BigFloat(string(interval_values[1])) : T(interval_values[1])
     b = T === BigFloat ? BigFloat(string(interval_values[2])) : T(interval_values[2])
     interval = (a, b)
-    funcs = __pygaussfsbp_parse_functions(op_funcs)
-    derivs = op_has_derivs ? __pygaussfsbp_parse_functions(op_derivs) : nothing
-    qfuncs = __pygaussfsbp_parse_functions(quad_funcs)
-    qderivs = quad_has_derivs ? __pygaussfsbp_parse_functions(quad_derivs) : nothing
+    funcs, derivs = __pygaussfsbp_parse_basis(
+        op_funcs, op_derivs, op_has_derivs, op_factory, interval, op_length)
+    qfuncs, qderivs = __pygaussfsbp_parse_basis(
+        quad_funcs, quad_derivs, quad_has_derivs, quad_factory, interval, quad_length)
     op_basis = GaussFSBP.FunctionBasis(funcs; derivs=derivs, interval=interval)
     quad_basis = GaussFSBP.FunctionBasis(qfuncs; derivs=qderivs, interval=interval)
+    kwargs = __pygaussfsbp_resolve_optimization_kwargs(kwargs, T)
     return Base.invokelatest(GaussFSBP.build_fsbp_operator, op_basis, quad_basis; kwargs...)
 end
 
 function __pygaussfsbp_build_from_strings(op_funcs, op_derivs, op_has_derivs,
+                                          op_factory, op_length,
                                           quad_funcs, quad_derivs, quad_has_derivs,
+                                          quad_factory, quad_length,
                                           interval_values, precision, digits, kwargs)
     precision_key = Symbol(String(precision))
     if precision_key === :float64
         return __pygaussfsbp_build_with_type(op_funcs, op_derivs, op_has_derivs,
+                                             op_factory, op_length,
                                              quad_funcs, quad_derivs, quad_has_derivs,
+                                             quad_factory, quad_length,
                                              interval_values, Float64, kwargs)
     elseif precision_key === :bigfloat
         return setprecision(BigFloat, Int(digits); base=10) do
             __pygaussfsbp_build_with_type(op_funcs, op_derivs, op_has_derivs,
+                                          op_factory, op_length,
                                           quad_funcs, quad_derivs, quad_has_derivs,
+                                          quad_factory, quad_length,
                                           interval_values, BigFloat, kwargs)
         end
     else
@@ -302,31 +498,83 @@ function __pygaussfsbp_print_operator_python(op, num_digits)
     return Base.invokelatest(GaussFSBP.print_fsbp_operator_python,
                              op; num_digits=Int(num_digits))
 end
+
+const __pygaussfsbp_true = true
+const __pygaussfsbp_false = false
 """
     )
     _HELPERS_READY = True
+
+
+def _julia_bool(jl: Any, value: bool) -> Any:
+    if hasattr(jl, "__pygaussfsbp_true") and hasattr(jl, "__pygaussfsbp_false"):
+        return jl.__pygaussfsbp_true if value else jl.__pygaussfsbp_false
+    if hasattr(jl, "seval"):
+        return jl.seval("true") if value else jl.seval("false")
+    raise TypeError("cannot convert Python bool to Julia bool without juliacall")
 
 
 def _make_named_tuple(jl: Any, values: Mapping[str, Any]) -> Any:
     if not isinstance(values, Mapping):
         raise TypeError("build kwargs must be a mapping")
     keys = [str(key) for key in values]
-    converted_values = [_convert_julia_value(jl, key, value) for key, value in values.items()]
+    converted_values = [
+        _convert_julia_value(jl, key, value) for key, value in values.items()
+    ]
     return jl.__pygaussfsbp_make_named_tuple(keys, converted_values)
+
+
+def _normalize_test_spec(value: Any, field_name: str) -> str | list[str]:
+    if isinstance(value, str):
+        if not value.strip():
+            raise ValueError(f"{field_name} must not be empty")
+        return value
+    if isinstance(value, (list, tuple)):
+        if not value:
+            raise ValueError(f"{field_name} must not be empty")
+        if any(not isinstance(item, str) for item in value):
+            raise TypeError(f"{field_name} must contain only Julia expression strings")
+        return list(value)
+    raise TypeError(
+        f"{field_name} must be a Julia vector expression string or a "
+        "sequence of Julia expression strings"
+    )
+
+
+def _convert_objective_weights(jl: Any, key_name: str, value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _make_named_tuple(jl, value)
+    if isinstance(value, (list, tuple)):
+        if len(value) != 2:
+            raise ValueError(
+                f"{key_name} must contain exactly two weights: [accuracy, norm]"
+            )
+        return jl.__pygaussfsbp_make_named_tuple(
+            ["accuracy", "norm"],
+            [value[0], value[1]],
+        )
+    raise TypeError(
+        f"{key_name} must be a length-2 sequence or mapping with "
+        "'accuracy' and 'norm' keys"
+    )
 
 
 def _convert_julia_value(jl: Any, key: Any, value: Any) -> Any:
     key_name = str(key)
     if isinstance(value, Mapping):
         return _make_named_tuple(jl, value)
-    if key_name in {"test_functions", "test_derivatives"}:
-        return jl.__pygaussfsbp_parse_functions(list(value))
+    if key_name in _TEST_SPEC_KEYS:
+        return _normalize_test_spec(value, key_name)
+    if key_name in _OBJECTIVE_WEIGHT_KEYS:
+        return _convert_objective_weights(jl, key_name, value)
     if key_name == "measure":
         return jl.__pygaussfsbp_parse_function(value)
     # GaussFSBP uses symbols for named choices. Function expressions are parsed
     # above, so every remaining Python string can safely follow that convention.
     if isinstance(value, str):
         return jl.Symbol(value)
+    if isinstance(value, bool):
+        return _julia_bool(jl, value)
     if isinstance(value, tuple):
         return tuple(_convert_julia_value(jl, key_name, item) for item in value)
     if isinstance(value, list):
@@ -339,7 +587,7 @@ def _infer_op_type(quad_basis: JuliaBasis, principal: Any) -> str:
         raise TypeError("quad_basis must be a JuliaBasis instance")
 
     principal_key = _principal_key(principal)
-    even_quad_basis = len(quad_basis.functions) % 2 == 0
+    even_quad_basis = len(quad_basis.labels) % 2 == 0
     if even_quad_basis:
         if principal_key == "upper":
             return "closed"

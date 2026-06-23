@@ -5,6 +5,8 @@ from .julia_operators import (
     JuliaOperatorError,
     build_operator_from_julia,
     build_julia_operator,
+    legendre_basis_factory,
+    print_fsbp_operator_python,
 )
 
 __all__ = [
@@ -12,4 +14,6 @@ __all__ = [
     "JuliaOperatorError",
     "build_operator_from_julia",
     "build_julia_operator",
+    "legendre_basis_factory",
+    "print_fsbp_operator_python",
 ]

@@ -38,6 +38,7 @@ from .lib import (
     JuliaOperatorError,
     build_operator_from_julia,
     build_julia_operator,
+    legendre_basis_factory,
     print_fsbp_operator_python,
 )
 from .problems import Problem
@@ -57,6 +58,7 @@ __all__ = [
     "JuliaOperatorError",
     "build_operator_from_julia",
     "build_julia_operator",
+    "legendre_basis_factory",
     "print_fsbp_operator_python",
     "Element1D",
     "make_elements",
