@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
+from matplotlib import rcParams
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tik
 import numpy as np
@@ -9,6 +10,19 @@ from scipy.optimize import curve_fit
 
 from .elements import Element1D
 from .solve import split_global_vector
+
+_LATEX_PREAMBLE = r"""
+\usepackage{amsmath}
+\usepackage{amssymb}
+"""
+
+rcParams.update(
+    {
+        "text.usetex": True,
+        "font.family": "serif",
+        "text.latex.preamble": _LATEX_PREAMBLE,
+    }
+)
 
 TAB_COLORS = [
     "tab:blue",
@@ -171,17 +185,19 @@ def plot_convergence(
     skip: Sequence[int] | None = None,
     ylabel: str | None = None,
     xlabel: str | None = None,
-    figsize: tuple[float, float] = (6, 4),
+    figsize: tuple[float, float] = (5, 4),
     title_size: int = 16,
-    tick_size: int = 12,
+    tick_size: int = 14,
     legendsize: int = 12,
     grid: bool = False,
     colors: Sequence[str] | None = None,
     markers: Sequence[str] | None = None,
     linestyles: Sequence[str] | None = None,
     legendloc: str = "best",
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
 ) -> plt.Figure:
-    """Log–log convergence plot with optional slope fits in the legend.
+    """Log-log convergence plot with optional slope fits in the legend.
 
     Parameters
     ----------
@@ -190,6 +206,8 @@ def plot_convergence(
         each mesh level.
     legend_strings
         One label per case.
+    xlim, ylim
+        Optional ``(min, max)`` axis limits in data coordinates (not log10).
     """
     dof_arr = np.asarray(dof_vec, dtype=float)
     err_arr = np.asarray(err_vec, dtype=float)
@@ -221,8 +239,11 @@ def plot_convergence(
     fig = plt.figure(figsize=figsize)
     if title is not None:
         plt.title(title, fontsize=title_size)
-    plt.ylabel(ylabel or r"$H$ error", fontsize=title_size)
-    plt.xlabel(xlabel or "Degrees of freedom", fontsize=title_size)
+    plt.ylabel(
+        ylabel or r"$\| \boldsymbol{u}_h - u(\boldsymbol{x}) \|_\mathsf{H}$",
+        fontsize=title_size,
+    )
+    plt.xlabel(xlabel or "DOF", fontsize=title_size)
 
     for i in range(n_cases):
         dof_mod, err_mod = _clean_series(dof_arr[i, skip[i] :], err_arr[i, skip[i] :])
@@ -279,6 +300,10 @@ def plot_convergence(
     ax = plt.gca()
     ax.yaxis.set_major_locator(tik.LogLocator(base=10.0, subs=[1.0], numticks=10))
     ax.yaxis.set_minor_locator(tik.LogLocator(base=10.0, subs="auto", numticks=10))
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
     ax.tick_params(axis="both", which="both", labelsize=tick_size)
     plt.tight_layout()
 
