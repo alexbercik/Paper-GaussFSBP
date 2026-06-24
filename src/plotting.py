@@ -295,7 +295,7 @@ def plot_convergence(
 
     plt.legend(loc=legendloc, fontsize=legendsize)
     if grid:
-        plt.grid(which="major", axis="both", linestyle="--", color="gray", linewidth=1)
+        plt.grid(which="major", axis="y", linestyle="--", color="gray", linewidth=1)
 
     ax = plt.gca()
     ax.yaxis.set_major_locator(tik.LogLocator(base=10.0, subs=[1.0], numticks=10))

@@ -9,6 +9,7 @@ import pytest
 import src.lib.julia_operators as julia_operators
 from src.lib.julia_operators import (
     JuliaBasis,
+    JuliaOperatorError,
     _infer_op_type,
     build_operator_from_julia,
     build_operator_from_sbp_extra,
@@ -54,6 +55,17 @@ def cached_polynomial_bases() -> tuple[JuliaBasis, JuliaBasis]:
         factory=legendre_basis_factory(4),
     )
     return op_basis, quad_basis
+
+
+def sbp_extra_arrays_for_nodes(
+    nodes: list[float],
+) -> tuple[list[list[float]], list[float], list[float]]:
+    n = len(nodes)
+    H = [1.0] * n
+    D = [[0.0 for _ in range(n)] for _ in range(n)]
+    D[0][0] = -0.5
+    D[-1][-1] = 0.5
+    return D, H, nodes
 
 
 def test_julia_basis_accepts_exactly_one_definition_style() -> None:
@@ -160,6 +172,7 @@ def test_build_operator_print_options_are_rejected_before_julia_loads() -> None:
 
 def test_build_operator_from_sbp_extra_converts_arrays(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     fake_operator = object()
     calls = []
@@ -168,35 +181,45 @@ def test_build_operator_from_sbp_extra_converts_arrays(
         functions: list[str],
         nodes: list[float],
         source: str,
-        regularization_functions: list[str],
-        autodiff: str,
-        verbose: bool,
+        max_iterations: int,
+        g_tol: float,
     ) -> object:
         calls.append(
-            (functions, nodes, source, regularization_functions, autodiff, verbose)
+            (
+                functions,
+                nodes,
+                source,
+                max_iterations,
+                g_tol,
+            )
         )
         return fake_operator
 
-    fake_julia = SimpleNamespace(
-        __pygaussfsbp_extra_operator=fake_build,
-        __pygaussfsbp_extra_operator_arrays=lambda op: (
+    def fake_arrays(op: object) -> tuple[list[list[float]], list[float], list[float]]:
+        assert op is fake_operator
+        return (
             [[-5.0, 5.0], [-5.0, 5.0]],
             [0.1, 0.1],
-            [1.0, 0.0],
-            [0.0, 1.0],
-        ),
+            [0.0, 0.2],
+        )
+
+    fake_julia = SimpleNamespace(
+        __pygaussfsbp_extra_operator=fake_build,
+        __pygaussfsbp_extra_operator_arrays=fake_arrays,
+        __pygaussfsbp_extra_basis_residual=lambda op, funcs: 0.0,
     )
     monkeypatch.setattr(julia_operators, "_load_julia", lambda: fake_julia)
 
     built = build_operator_from_sbp_extra(
         ["x -> one(x)", "x -> x"],
-        [0.0, 0.2],
+        2,
         basis_labels=["1", "x"],
-        quad_basis_labels=["1", "x", "x^2"],
+        quad_basis_labels=["1", "x"],
         op_type="closed",
         interval=(0.0, 0.2),
         source="basic",
-        regularization_functions=["x -> x^2"],
+        max_iterations=123,
+        g_tol=1.0e-19,
         verbose=True,
     )
 
@@ -205,22 +228,24 @@ def test_build_operator_from_sbp_extra_converts_arrays(
             ["x -> one(x)", "x -> x"],
             [0.0, 0.2],
             "basic",
-            ["x -> x^2"],
-            "forwarddiff",
-            True,
+            123,
+            1.0e-19,
         )
     ]
     assert isinstance(built, Operator)
     assert built.basis == ["1", "x"]
-    assert built.quad_basis == ["1", "x", "x^2"]
+    assert built.quad_basis == ["1", "x"]
     np.testing.assert_allclose(built.nodes, [0.0, 0.2])
+    np.testing.assert_allclose(built.tL, [1.0, 0.0])
+    np.testing.assert_allclose(built.tR, [0.0, 1.0])
+    assert "converged for N=2" in capsys.readouterr().out
 
 
 def test_build_operator_from_sbp_extra_validates_before_julia_loads() -> None:
     with pytest.raises(ValueError, match="functions and basis_labels"):
         build_operator_from_sbp_extra(
             ["x -> one(x)"],
-            [0.0],
+            2,
             basis_labels=["1", "x"],
             quad_basis_labels=["1"],
             op_type="closed",
@@ -228,11 +253,189 @@ def test_build_operator_from_sbp_extra_validates_before_julia_loads() -> None:
     with pytest.raises(ValueError, match="Invalid op_type"):
         build_operator_from_sbp_extra(
             ["x -> one(x)"],
-            [0.0],
+            2,
             basis_labels=["1"],
             quad_basis_labels=["1"],
             op_type="bad",
         )
+    with pytest.raises(ValueError, match="initial_num_nodes"):
+        build_operator_from_sbp_extra(
+            ["x -> one(x)"],
+            1,
+            basis_labels=["1"],
+            quad_basis_labels=["1"],
+            op_type="closed",
+        )
+    with pytest.raises(ValueError, match="source must be"):
+        build_operator_from_sbp_extra(
+            ["x -> one(x)"],
+            2,
+            basis_labels=["1"],
+            quad_basis_labels=["1"],
+            op_type="closed",
+            source="regularized",
+        )
+    with pytest.raises(ValueError, match="g_tol"):
+        build_operator_from_sbp_extra(
+            ["x -> one(x)"],
+            2,
+            basis_labels=["1"],
+            quad_basis_labels=["1"],
+            op_type="closed",
+            g_tol=0.0,
+        )
+
+
+def test_build_operator_from_sbp_extra_retries_after_julia_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[float]] = []
+
+    def fake_build(
+        functions: list[str],
+        nodes: list[float],
+        source: str,
+        max_iterations: int,
+        g_tol: float,
+    ) -> list[float]:
+        calls.append(nodes)
+        if len(calls) == 1:
+            raise RuntimeError("no feasible point")
+        return nodes
+
+    fake_julia = SimpleNamespace(
+        __pygaussfsbp_extra_operator=fake_build,
+        __pygaussfsbp_extra_operator_arrays=sbp_extra_arrays_for_nodes,
+        __pygaussfsbp_extra_basis_residual=lambda op, funcs: 0.0,
+    )
+    monkeypatch.setattr(julia_operators, "_load_julia", lambda: fake_julia)
+
+    built = build_operator_from_sbp_extra(
+        ["x -> one(x)"],
+        2,
+        basis_labels=["1"],
+        quad_basis_labels=["1"],
+        op_type="closed",
+        max_num_nodes=3,
+    )
+
+    assert [len(nodes) for nodes in calls] == [2, 3]
+    np.testing.assert_allclose(built.nodes, [0.0, 0.5, 1.0])
+
+
+def test_build_operator_from_sbp_extra_retries_after_residual_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[float]] = []
+
+    def fake_build(
+        functions: list[str],
+        nodes: list[float],
+        source: str,
+        max_iterations: int,
+        g_tol: float,
+    ) -> list[float]:
+        calls.append(nodes)
+        return nodes
+
+    def fake_arrays(nodes: list[float]) -> tuple[list[list[float]], list[float], list[float]]:
+        if len(nodes) == 2:
+            return [[0.0, 0.0], [0.0, 0.0]], [1.0, 1.0], nodes
+        return sbp_extra_arrays_for_nodes(nodes)
+
+    fake_julia = SimpleNamespace(
+        __pygaussfsbp_extra_operator=fake_build,
+        __pygaussfsbp_extra_operator_arrays=fake_arrays,
+        __pygaussfsbp_extra_basis_residual=lambda op, funcs: 0.0,
+    )
+    monkeypatch.setattr(julia_operators, "_load_julia", lambda: fake_julia)
+
+    built = build_operator_from_sbp_extra(
+        ["x -> one(x)"],
+        2,
+        basis_labels=["1"],
+        quad_basis_labels=["1"],
+        op_type="closed",
+        max_num_nodes=3,
+    )
+
+    assert [len(nodes) for nodes in calls] == [2, 3]
+    np.testing.assert_allclose(built.nodes, [0.0, 0.5, 1.0])
+
+
+def test_build_operator_from_sbp_extra_errors_after_max_num_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_build(
+        functions: list[str],
+        nodes: list[float],
+        source: str,
+        max_iterations: int,
+        g_tol: float,
+    ) -> list[float]:
+        return nodes
+
+    def fake_arrays(nodes: list[float]) -> tuple[list[list[float]], list[float], list[float]]:
+        n = len(nodes)
+        return [[0.0 for _ in range(n)] for _ in range(n)], [1.0] * n, nodes
+
+    fake_julia = SimpleNamespace(
+        __pygaussfsbp_extra_operator=fake_build,
+        __pygaussfsbp_extra_operator_arrays=fake_arrays,
+        __pygaussfsbp_extra_basis_residual=lambda op, funcs: 0.0,
+    )
+    monkeypatch.setattr(julia_operators, "_load_julia", lambda: fake_julia)
+
+    with pytest.raises(JuliaOperatorError, match="N=2..3"):
+        build_operator_from_sbp_extra(
+            ["x -> one(x)"],
+            2,
+            basis_labels=["1"],
+            quad_basis_labels=["1"],
+            op_type="closed",
+            max_num_nodes=3,
+        )
+
+
+def test_build_operator_from_sbp_extra_verbose_reports_retry_status(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = 0
+
+    def fake_build(
+        functions: list[str],
+        nodes: list[float],
+        source: str,
+        max_iterations: int,
+        g_tol: float,
+    ) -> list[float]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("not enough nodes")
+        return nodes
+
+    fake_julia = SimpleNamespace(
+        __pygaussfsbp_extra_operator=fake_build,
+        __pygaussfsbp_extra_operator_arrays=sbp_extra_arrays_for_nodes,
+        __pygaussfsbp_extra_basis_residual=lambda op, funcs: 0.0,
+    )
+    monkeypatch.setattr(julia_operators, "_load_julia", lambda: fake_julia)
+
+    build_operator_from_sbp_extra(
+        ["x -> one(x)"],
+        2,
+        basis_labels=["1"],
+        quad_basis_labels=["1"],
+        op_type="closed",
+        max_num_nodes=3,
+        verbose=True,
+    )
+
+    output = capsys.readouterr().out
+    assert "failed for N=2" in output
+    assert "converged for N=3" in output
 
 
 def test_interval_values_use_repr_for_bigfloat() -> None:

@@ -8,7 +8,6 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.sparse as sp
-from sympy import false
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -16,7 +15,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from src import (
     JuliaBasis,
+    JuliaOperatorError,
     build_operator_from_julia,
+    build_operator_from_sbp_extra,
     check_nullspace_consistency,
     check_sbp_property,
     legendre_basis_factory,
@@ -38,7 +39,7 @@ DOMAIN = (0.0, 1.0)
 REF_DOMAIN = (0.0, 1.0)
 ELEMENT_COUNTS = [4, 8, 16, 32]
 COARSE_ELEMENTS = 4
-SAT_TYPE = "upwind"
+SAT_TYPE = "central"
 SHOW_PLOTS = True
 VERBOSE = False
 QUAD_VERBOSE = False
@@ -51,6 +52,8 @@ op_type = "closed"
 # number of approximation functions as the enriched basis.
 P = 3
 BASIS_EXPONENT = 11 # use 10.1 for p2, 10.9 for p3, 11.4 for p4
+EQUISPACED_EXTRA_NODE_BUFFER = 20
+EQUISPACED_MESH_ELEMENT_FACTOR = 2
 
 # Scale the reference-element enrichment to represent the same physical-space
 # exponential on every uniform mesh. If True, the actual basis exponent is
@@ -72,6 +75,13 @@ opt_S_weights = [1.0, 0.1]
 
 if not isinstance(MODEL_EXPONENT_k, int) or isinstance(MODEL_EXPONENT_k, bool):
     raise ValueError("MODEL_EXPONENT_k must be an integer")
+
+POLYNOMIAL_P_STYLE = {"color": "tab:purple", "marker": "o"}
+POLYNOMIAL_P_PLUS_ONE_STYLE = {"color": "tab:blue", "marker": "^"}
+MIN_NORM_STYLE = {"color": "tab:green", "marker": "s"}
+OPTIMIZED_STYLE = {"color": "tab:red", "marker": "d"}
+SEQUENTIAL_STYLE = {"color": "tab:orange", "marker": "x"}
+EQUISPACED_STYLE = {"color": "tab:brown", "marker": "+"}
 
 
 def legendre_basis(num_functions: int) -> JuliaBasis:
@@ -257,6 +267,121 @@ def build_exponential_operator(
     )
 
 
+def _bernstein_basis_on_unit_interval(p: int) -> tuple[list[str], list[str]]:
+    """Return labels and Julia strings for Bernstein ``B_0^p, ..., B_p^p`` on [0, 1]."""
+    labels: list[str] = []
+    functions: list[str] = []
+    for k in range(p + 1):
+        labels.append(f"B_{k}^{p}")
+        if k == 0:
+            if p == 0:
+                functions.append("x -> one(x)")
+            else:
+                functions.append(f"x -> (1 - x)^{p}")
+        elif k == p:
+            functions.append(f"x -> x^{p}")
+        else:
+            functions.append(
+                f"x -> binomial({p}, {k}) * x^{k} * (1 - x)^({p} - {k})"
+            )
+    return labels, functions
+
+
+def sbp_extra_exponential_basis(
+    p: int,
+    exponent: float,
+    exponent_divisor: int = 1,
+) -> tuple[list[str], list[str]]:
+    """Create a conditioned polynomial-plus-exponential basis for SBP-extra on [0, 1].
+    Polynomials use the degree-``p`` Bernstein basis for better numerical conditioning
+    """
+    if p < 0:
+        raise ValueError("p must be nonnegative")
+    if not np.isfinite(exponent):
+        raise ValueError("exponent must be finite")
+    if exponent == 0.0:
+        raise ValueError("exponent must be nonzero")
+    if (
+        not isinstance(exponent_divisor, int)
+        or isinstance(exponent_divisor, bool)
+        or exponent_divisor < 1
+    ):
+        raise ValueError("exponent_divisor must be a positive integer")
+
+    exponent_text = repr(exponent)
+    scaled_exponent_text = exponent_text
+    if exponent_divisor != 1:
+        scaled_exponent_text = f"({exponent_text}/{exponent_divisor})"
+    julia_exponent = f"({exponent_text} / {exponent_divisor})"
+
+    labels, functions = _bernstein_basis_on_unit_interval(p)
+
+    labels.append(f"exp({scaled_exponent_text}x)")
+    functions.append(f"let a = {julia_exponent}; x -> exp(a * x); end")
+    return labels, functions
+
+
+def build_equispaced_exponential_operator(
+    p: int,
+    exponent: float,
+    *,
+    exponent_divisor: int = 1,
+) -> Operator:
+    """Build one SBP-extra operator on uniform endpoint-including nodes."""
+    basis_labels, functions = sbp_extra_exponential_basis(
+        p,
+        exponent,
+        exponent_divisor,
+    )
+    initial_num_nodes = p + 2
+    if VERBOSE:
+        print("\nBuilding equispaced exponential operator (closed)", flush=True)
+    return build_operator_from_sbp_extra(
+        functions,
+        initial_num_nodes,
+        basis_labels=basis_labels,
+        quad_basis_labels=basis_labels,
+        op_type="closed",
+        interval=REF_DOMAIN,
+        source="orig",
+        max_num_nodes=initial_num_nodes + EQUISPACED_EXTRA_NODE_BUFFER,
+        verbose=VERBOSE,
+        max_iterations=200000,
+        g_tol=1.0e-25,
+        sbp_tolerance=1.0e-12,
+        accuracy_tolerance=1.0e-8,
+    )
+
+
+def safe_build_equispaced_exponential_operator(
+    p: int,
+    exponent: float,
+    *,
+    exponent_divisor: int = 1,
+) -> Operator | None:
+    """Build equispaced operator, returning None instead of raising on failure."""
+    try:
+        return build_equispaced_exponential_operator(
+            p,
+            exponent,
+            exponent_divisor=exponent_divisor,
+        )
+    except JuliaOperatorError as exc:
+        warnings.warn(
+            "Equispaced operator construction failed: "
+            f"{exc}",
+            RuntimeWarning,
+        )
+        return None
+    except Exception as exc:
+        warnings.warn(
+            "Equispaced operator construction failed with "
+            f"{type(exc).__name__}: {exc}",
+            RuntimeWarning,
+        )
+        return None
+
+
 def build_runs() -> list[dict[str, object]]:
     """Build the polynomial and enriched comparison operators in Julia."""
     if op_type not in {"open", "closed"}:
@@ -292,6 +417,11 @@ def build_runs() -> list[dict[str, object]]:
                     num_elements: polynomial_operator
                     for num_elements in mesh_counts
                 },
+                **(
+                    POLYNOMIAL_P_STYLE
+                    if polynomial_degree == P
+                    else POLYNOMIAL_P_PLUS_ONE_STYLE
+                ),
             }
         )
 
@@ -337,6 +467,45 @@ def build_runs() -> list[dict[str, object]]:
                     f"$p={P}$ + exp, {construction}"
                 ),
                 "operators": operators,
+                **(
+                    MIN_NORM_STYLE
+                    if construction == "min-norm"
+                    else OPTIMIZED_STYLE
+                    if construction in {"optimized", "simultaneous"}
+                    else SEQUENTIAL_STYLE
+                ),
+            }
+        )
+
+    if op_type == "closed":
+        equispaced_factor = EQUISPACED_MESH_ELEMENT_FACTOR
+        if SCALE_BASIS_EXPONENT:
+            equispaced_operators = {
+                num_elements: safe_build_equispaced_exponential_operator(
+                    P,
+                    BASIS_EXPONENT,
+                    exponent_divisor=_mesh_elements(
+                        num_elements, equispaced_factor
+                    ),
+                )
+                for num_elements in mesh_counts
+            }
+        else:
+            equispaced_operator = safe_build_equispaced_exponential_operator(
+                P,
+                BASIS_EXPONENT,
+            )
+            equispaced_operators = {
+                num_elements: equispaced_operator
+                for num_elements in mesh_counts
+            }
+
+        runs.append(
+            {
+                "label": f"$p={P}$ + exp, equispaced",
+                "operators": equispaced_operators,
+                "mesh_element_factor": equispaced_factor,
+                **EQUISPACED_STYLE,
             }
         )
 
@@ -394,13 +563,33 @@ def solve_on_mesh(
     return system.elements, u
 
 
-def operator_for_mesh(run: dict[str, object], num_elements: int) -> Operator:
+def _mesh_elements(num_elements: int, factor: int = 1) -> int:
+    mesh_elements = num_elements // factor
+    if mesh_elements < 1:
+        raise ValueError(
+            f"mesh_element_factor={factor} is too large for "
+            f"{num_elements} elements"
+        )
+    return mesh_elements
+
+
+def mesh_elements_for_run(run: dict[str, object], num_elements: int) -> int:
+    factor = int(run.get("mesh_element_factor", 1))
+    return _mesh_elements(num_elements, factor)
+
+
+def operator_for_mesh(
+    run: dict[str, object],
+    num_elements: int,
+) -> Operator | None:
     """Return the operator assigned to one mesh in a convergence run."""
     operators = run.get("operators")
     if not isinstance(operators, Mapping):
         raise TypeError("run operators must be a mapping keyed by mesh size")
 
     operator = operators.get(num_elements)
+    if operator is None:
+        return None
     if not isinstance(operator, Operator):
         raise TypeError(
             f"run has no valid Operator for {num_elements} elements"
@@ -414,93 +603,152 @@ def run_convergence(
     errors: list[float] = []
     dofs: list[int] = []
     hs: list[float] = []
+    mesh_counts: list[int] = []
 
     print(f"\nRun: {run['label']}, SAT: {SAT_TYPE}")
     print("num_elements  total_dofs  H_error        rate")
     for num_elements in ELEMENT_COUNTS:
+        mesh_elements = mesh_elements_for_run(run, num_elements)
+        mesh_counts.append(mesh_elements)
         operator = operator_for_mesh(run, num_elements)
+        if operator is None:
+            errors.append(np.nan)
+            dofs.append(np.nan)
+            hs.append((DOMAIN[1] - DOMAIN[0]) / mesh_elements)
+            continue
+
         if not check_sbp_property(operator, print_report=True):
             warnings.warn(
                 f"SBP check failed for {run['label']} on the "
-                f"{num_elements}-element mesh",
+                f"{mesh_elements}-element mesh",
                 RuntimeWarning,
             )
         if not check_nullspace_consistency(operator, print_report=True):
             warnings.warn(
                 f"Operator D is not nullspace consistent for {run['label']} on "
-                f"the {num_elements}-element mesh",
+                f"the {mesh_elements}-element mesh",
                 RuntimeWarning,
             )
-        elements, u = solve_on_mesh(operator, num_elements)
+        elements, u = solve_on_mesh(operator, mesh_elements)
         errors.append(global_H_error(elements, u, u_exact))
         dofs.append(sum(element.x.size for element in elements))
-        hs.append((DOMAIN[1] - DOMAIN[0]) / num_elements)
+        hs.append((DOMAIN[1] - DOMAIN[0]) / mesh_elements)
 
     rates = convergence_rate(np.asarray(errors), np.asarray(hs))
-    for num_elements, num_dofs, error, rate in zip(
-        ELEMENT_COUNTS, dofs, errors, rates
+    for mesh_elements, num_dofs, error, rate in zip(
+        mesh_counts, dofs, errors, rates
     ):
         rate_text = "-" if np.isnan(rate) else f"{rate:8.4f}"
-        print(f"{num_elements:12d}  {num_dofs:10d}  {error:12.4e}  {rate_text}")
+        if np.isfinite(error):
+            error_text = f"{error:12.4e}"
+        else:
+            error_text = f"{'nan':>12s}"
+        dof_text = (
+            f"{int(num_dofs):10d}"
+            if np.isfinite(num_dofs)
+            else f"{'nan':>10s}"
+        )
+        print(f"{mesh_elements:12d}  {dof_text}  {error_text}  {rate_text}")
 
     return np.asarray(dofs, dtype=float), np.asarray(errors)
 
+########################################################
+# Main code execution
+########################################################
 
-def main() -> None:
-    runs = build_runs()
-    dof_rows: list[np.ndarray] = []
-    error_rows: list[np.ndarray] = []
-    profiles: list[list[tuple[np.ndarray, np.ndarray]]] = []
+runs = build_runs()
+dof_rows: list[np.ndarray] = []
+error_rows: list[np.ndarray] = []
+profiles: list[list[tuple[np.ndarray, np.ndarray]]] = []
 
-    for run in runs:
-        dofs, errors = run_convergence(run)
-        dof_rows.append(dofs)
-        error_rows.append(errors)
+for run in runs:
+    dofs, errors = run_convergence(run)
+    dof_rows.append(dofs)
+    error_rows.append(errors)
 
-        operator = operator_for_mesh(run, COARSE_ELEMENTS)
-        coarse_elements, coarse_u = solve_on_mesh(operator, COARSE_ELEMENTS)
+    coarse_mesh_elements = mesh_elements_for_run(run, COARSE_ELEMENTS)
+    operator = operator_for_mesh(run, COARSE_ELEMENTS)
+    if operator is None:
+        profiles.append([])
+    else:
+        coarse_elements, coarse_u = solve_on_mesh(operator, coarse_mesh_elements)
         profiles.append(profile_from_elements(coarse_elements, coarse_u))
 
-    labels = [str(run["label"]) for run in runs]
-    if MODEL_EXPONENT_b == 0.0:
-        convergence_title = rf"$u_x=(2a x)u$, {op_type} operators"
-        solution_title = (
-            rf"$u=e^{{{MODEL_EXPONENT_a:g}x^2}}$ "
-            f"({COARSE_ELEMENTS} elements)"
-        )
-    else:
-        convergence_title = (
-            r"$u_x=(2a x + b k\pi\cos(k\pi x))u$, "
-            f"{op_type} operators"
-        )
-        solution_title = (
-            rf"$u=e^{{{MODEL_EXPONENT_a:g}x^2 + "
-            rf"{MODEL_EXPONENT_b:g}\sin({MODEL_EXPONENT_k}\pi x)}}$ "
-            f"({COARSE_ELEMENTS} elements)"
-        )
-
-    plot_convergence(
-        np.vstack(dof_rows),
-        np.vstack(error_rows),
-        labels,
-        title=None, #convergence_title,
-        grid=True,
-        ylim=(1e-10, 1e-1),
+labels = [str(run["label"]) for run in runs]
+plot_colors = [str(run["color"]) for run in runs]
+plot_markers = [str(run["marker"]) for run in runs]
+if MODEL_EXPONENT_b == 0.0:
+    convergence_title = rf"$u_x=(2a x)u$, {op_type} operators"
+    solution_title = (
+        rf"$u=e^{{{MODEL_EXPONENT_a:g}x^2}}$ "
+        f"({COARSE_ELEMENTS} elements)"
+    )
+else:
+    convergence_title = (
+        r"$u_x=(2a x + b k\pi\cos(k\pi x))u$, "
+        f"{op_type} operators"
+    )
+    solution_title = (
+        rf"$u=e^{{{MODEL_EXPONENT_a:g}x^2 + "
+        rf"{MODEL_EXPONENT_b:g}\sin({MODEL_EXPONENT_k}\pi x)}}$ "
+        f"({COARSE_ELEMENTS} elements)"
     )
 
-    x_exact, exact_values = exact_profile_on_domain(u_exact, domain=DOMAIN)
+plot_convergence(
+    np.vstack(dof_rows),
+    np.vstack(error_rows),
+    labels,
+    title=None, #convergence_title,
+    grid=True,
+    ylim=(1e-10, 9e-1),
+    xlim=(14, 250),
+    colors=plot_colors,
+    markers=plot_markers,
+)
+
+x_exact, exact_values = exact_profile_on_domain(u_exact, domain=DOMAIN)
+solution_labels = [
+    label for label, profile in zip(labels, profiles) if profile
+]
+solution_profiles = [profile for profile in profiles if profile]
+solution_colors = [
+    color for color, profile in zip(plot_colors, profiles) if profile
+]
+solution_markers = [
+    marker for marker, profile in zip(plot_markers, profiles) if profile
+]
+if solution_profiles:
     plot_solution_profiles(
-        profiles,
-        labels,
+        solution_profiles,
+        solution_labels,
         x_exact=x_exact,
         u_exact=exact_values,
         title=solution_title,
         grid=True,
+        colors=solution_colors,
+        markers=solution_markers,
     )
 
-    if SHOW_PLOTS:
-        plt.show()
+if SHOW_PLOTS:
+    plt.show()
 
 
-if __name__ == "__main__":
-    main()
+# SAVE_PATH = "p4_closed_central.npz"
+# np.savez_compressed(
+#     SAVE_PATH,
+#     dof_rows=np.vstack(dof_rows),
+#     error_rows=np.vstack(error_rows),
+#     labels=np.asarray(labels),
+#     plot_colors=np.asarray(plot_colors),
+#     plot_markers=np.asarray(plot_markers),
+# )
+
+"""
+# Load
+data = np.load(SAVE_PATH)
+dof_rows = data["dof_rows"]
+error_rows = data["error_rows"]
+labels_p3 = data["labels"].tolist()
+plot_colors = data["plot_colors"].tolist()
+plot_markers = data["plot_markers"].tolist()
+"""

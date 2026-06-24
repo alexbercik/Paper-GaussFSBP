@@ -18,6 +18,10 @@ _TEST_SPEC_KEYS = frozenset({"test_functions", "test_derivatives"})
 _OBJECTIVE_WEIGHT_KEYS = frozenset(
     {"extrapolation_objective_weights", "S_objective_weights"}
 )
+_SBP_EXTRA_SBP_TOLERANCE = 1.0e-12
+_SBP_EXTRA_ACCURACY_TOLERANCE = 1.0e-8
+_SBP_EXTRA_OPTIMIZER_TOLERANCE = 1.0e-18
+_SBP_EXTRA_SOURCES = frozenset({"basic", "orig"})
 
 
 class JuliaOperatorError(RuntimeError):
@@ -250,32 +254,37 @@ def build_operator_from_julia(
 
 def build_operator_from_sbp_extra(
     functions: Sequence[str],
-    nodes: Sequence[float],
+    initial_num_nodes: int,
     *,
     basis_labels: Sequence[str],
     quad_basis_labels: Sequence[str],
     op_type: str,
     interval: tuple[float, float] = (0.0, 1.0),
-    source: str = "regularized",
-    regularization_functions: Sequence[str] = (),
+    source: str = "basic",
     selector: int = 0,
     name: str | None = None,
-    autodiff: str = "forwarddiff",
+    max_num_nodes: int | None = None,
+    max_iterations: int = 5000,
+    g_tol: float = _SBP_EXTRA_OPTIMIZER_TOLERANCE,
+    sbp_tolerance: float = _SBP_EXTRA_SBP_TOLERANCE,
+    accuracy_tolerance: float = _SBP_EXTRA_ACCURACY_TOLERANCE,
     verbose: bool = False,
 ) -> Operator:
     """Build an operator with `SummationByPartsOperatorsExtra.jl`.
 
-    The function strings are trusted Julia callable expressions. `source`
-    accepts the short selectors `"regularized"` and `"basic"`, or an exported
-    constructor name from `SummationByPartsOperatorsExtra`.
+    The function strings are trusted Julia callable expressions. Candidate
+    operators are built on endpoint-including uniform nodes, starting with
+    ``initial_num_nodes`` and increasing the count until the SBP and basis
+    derivative residuals verify. Julia output stays quiet; Python's
+    ``verbose`` flag reports retry status.
+
+    SBP residuals should be near roundoff. The basis accuracy residual is a
+    numerical optimization diagnostic, so it has a looser default tolerance.
     """
 
     functions = _as_string_tuple(functions, "functions")
     basis_labels = _as_string_tuple(basis_labels, "basis_labels")
     quad_basis_labels = _as_string_tuple(quad_basis_labels, "quad_basis_labels")
-    regularization_functions = _as_string_tuple(
-        regularization_functions, "regularization_functions"
-    )
     if len(functions) != len(basis_labels):
         raise ValueError("functions and basis_labels must have the same length")
     if not quad_basis_labels:
@@ -286,38 +295,98 @@ def build_operator_from_sbp_extra(
         raise TypeError("selector must be an integer")
     if name is not None and not isinstance(name, str):
         raise TypeError("name must be a string or None")
-    if not isinstance(source, str) or not source.strip():
-        raise ValueError("source must be a nonempty string")
-    if not isinstance(autodiff, str) or not autodiff.strip():
-        raise ValueError("autodiff must be a nonempty string")
+    if source not in _SBP_EXTRA_SOURCES:
+        raise ValueError("source must be 'basic' or 'orig'")
+    initial_num_nodes = _normalize_num_nodes(initial_num_nodes, "initial_num_nodes")
+    if max_num_nodes is None:
+        max_num_nodes = initial_num_nodes + 50
+    max_num_nodes = _normalize_num_nodes(max_num_nodes, "max_num_nodes")
+    if max_num_nodes < initial_num_nodes:
+        raise ValueError("max_num_nodes must be greater than or equal to initial_num_nodes")
+    max_iterations = _normalize_positive_int(max_iterations, "max_iterations")
+    g_tol = _normalize_positive_float(g_tol, "g_tol")
+    sbp_tolerance = _normalize_positive_float(sbp_tolerance, "sbp_tolerance")
+    accuracy_tolerance = _normalize_positive_float(
+        accuracy_tolerance,
+        "accuracy_tolerance",
+    )
     if not isinstance(verbose, bool):
         raise TypeError("verbose must be True or False")
 
     interval = _normalize_interval(interval)
-    node_values = _as_float_vector(nodes, "nodes")
     jl = _load_julia()
-    sbp_operator = jl.__pygaussfsbp_extra_operator(
-        list(functions),
-        node_values.tolist(),
-        source,
-        list(regularization_functions),
-        autodiff,
-        verbose,
-    )
-    D, H, tL, tR = jl.__pygaussfsbp_extra_operator_arrays(sbp_operator)
+    last_failure = "no candidate was attempted"
 
-    return Operator(
-        name=name,
-        basis=list(basis_labels),
-        quad_basis=list(quad_basis_labels),
-        op_type=op_type,
-        selector=selector,
-        interval=np.asarray(interval, dtype=float),
-        nodes=node_values,
-        D=np.asarray(D, dtype=float),
-        H=np.asarray(H, dtype=float),
-        tL=np.asarray(tL, dtype=float),
-        tR=np.asarray(tR, dtype=float),
+    for num_nodes in range(initial_num_nodes, max_num_nodes + 1):
+        node_values = np.linspace(interval[0], interval[1], num_nodes)
+        try:
+            sbp_operator = jl.__pygaussfsbp_extra_operator(
+                list(functions),
+                node_values.tolist(),
+                source,
+                max_iterations,
+                g_tol,
+            )
+            D, H, operator_nodes = jl.__pygaussfsbp_extra_operator_arrays(sbp_operator)
+            operator_nodes = np.asarray(operator_nodes, dtype=float)
+            D_array = np.asarray(D, dtype=float)
+            H_array = np.asarray(H, dtype=float)
+
+            # The SBP-extra path is endpoint based, so boundary traces are
+            # direct endpoint evaluations instead of extrapolation formulas.
+            tL = np.zeros(operator_nodes.size, dtype=float)
+            tR = np.zeros(operator_nodes.size, dtype=float)
+            tL[0] = 1.0
+            tR[-1] = 1.0
+
+            sbp_residual = _sbp_extra_sbp_residual(D_array, H_array, tL, tR)
+            accuracy_residual = float(
+                jl.__pygaussfsbp_extra_basis_residual(
+                    sbp_operator,
+                    list(functions),
+                )
+            )
+        except Exception as exc:
+            last_failure = f"N={num_nodes} failed with {type(exc).__name__}: {exc}"
+            if verbose:
+                print(f"SBP-extra equispaced failed for N={num_nodes}: {exc}", flush=True)
+            continue
+
+        if (
+            sbp_residual <= sbp_tolerance
+            and accuracy_residual <= accuracy_tolerance
+        ):
+            if verbose:
+                print(
+                    "SBP-extra equispaced converged for "
+                    f"N={num_nodes}: SBP={sbp_residual:.3e}, "
+                    f"accuracy={accuracy_residual:.3e}",
+                    flush=True,
+                )
+            return Operator(
+                name=name,
+                basis=list(basis_labels),
+                quad_basis=list(quad_basis_labels),
+                op_type=op_type,
+                selector=selector,
+                interval=np.asarray(interval, dtype=float),
+                nodes=operator_nodes,
+                D=D_array,
+                H=H_array,
+                tL=tL,
+                tR=tR,
+            )
+
+        last_failure = (
+            f"N={num_nodes} rejected with SBP={sbp_residual:.3e}, "
+            f"accuracy={accuracy_residual:.3e}"
+        )
+        if verbose:
+            print(f"SBP-extra equispaced {last_failure}", flush=True)
+
+    raise JuliaOperatorError(
+        "SummationByPartsOperatorsExtra failed to build a verified operator "
+        f"for N={initial_num_nodes}..{max_num_nodes}: {last_failure}"
     )
 
 
@@ -343,6 +412,45 @@ def _as_float_vector(values: Sequence[float], field_name: str) -> np.ndarray:
     if not np.all(np.isfinite(array)):
         raise ValueError(f"{field_name} entries must be finite")
     return array
+
+
+def _normalize_num_nodes(value: int, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TypeError(f"{field_name} must be an integer")
+    if value < 2:
+        raise ValueError(f"{field_name} must be at least 2")
+    return value
+
+
+def _normalize_positive_int(value: int, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TypeError(f"{field_name} must be an integer")
+    if value < 1:
+        raise ValueError(f"{field_name} must be positive")
+    return value
+
+
+def _normalize_positive_float(value: float, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must be a number")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{field_name} must be a number") from exc
+    if not np.isfinite(normalized) or normalized <= 0.0:
+        raise ValueError(f"{field_name} must be positive and finite")
+    return normalized
+
+
+def _sbp_extra_sbp_residual(
+    D: np.ndarray,
+    H: np.ndarray,
+    tL: np.ndarray,
+    tR: np.ndarray,
+) -> float:
+    HD = H[:, None] * D
+    boundary = np.outer(tR, tR) - np.outer(tL, tL)
+    return float(np.max(np.abs(HD + HD.T - boundary)))
 
 
 def _normalize_interval(interval: tuple[float, float]) -> tuple[float, float]:
@@ -421,6 +529,7 @@ using ADTypes
 using ForwardDiff
 using Manifolds
 using Manopt
+using Optim
 using SummationByPartsOperators
 using SummationByPartsOperatorsExtra
 """
@@ -601,41 +710,46 @@ end
 
 function __pygaussfsbp_extra_source(source_name)
     key = Symbol(String(source_name))
-    if key === :regularized
-        return getfield(
-            SummationByPartsOperatorsExtra,
-            Symbol("GlaubitzIskeLampert\u00d6ffner2026Regularized"),
-        )()
-    elseif key === :basic
+    if key === :basic
         return getfield(
             SummationByPartsOperatorsExtra,
             Symbol("GlaubitzIskeLampert\u00d6ffner2026Basic"),
         )()
+    elseif key === :orig
+        return getfield(
+            SummationByPartsOperatorsExtra,
+            Symbol("GlaubitzNordstr\u00f6m\u00d6ffner2023"),
+        )()
     end
-    return getfield(SummationByPartsOperatorsExtra, key)()
+    throw(ArgumentError("unsupported SBP-extra source: $(source_name)"))
 end
 
-function __pygaussfsbp_extra_autodiff(autodiff_name)
-    key = Symbol(String(autodiff_name))
-    if key === :forwarddiff
-        return ADTypes.AutoForwardDiff()
+function __pygaussfsbp_extra_options(source_name, max_iterations, g_tol)
+    key = Symbol(String(source_name))
+    if key === :basic
+        return (;
+            stopping_criterion = StopAfterIteration(Int(max_iterations)) |
+                                 StopWhenCostLess(Float64(g_tol)),
+        )
+    elseif key === :orig
+        return Optim.Options(
+            g_tol = Float64(g_tol),
+            iterations = Int(max_iterations),
+            show_trace = false,
+        )
     end
-    throw(ArgumentError("unsupported autodiff selector: $(autodiff_name)"))
+    throw(ArgumentError("unsupported SBP-extra source: $(source_name)"))
 end
 
 function __pygaussfsbp_extra_operator(func_exprs, nodes, source_name,
-                                      regularization_exprs, autodiff_name,
-                                      verbose)
+                                      max_iterations, g_tol)
     funcs = Tuple(__pygaussfsbp_parse_functions(func_exprs))
     source = __pygaussfsbp_extra_source(source_name)
     kwargs = Pair{Symbol, Any}[
-        :autodiff => __pygaussfsbp_extra_autodiff(autodiff_name),
-        :verbose => Bool(verbose),
+        :autodiff => ADTypes.AutoForwardDiff(),
+        :options => __pygaussfsbp_extra_options(source_name, max_iterations, g_tol),
+        :verbose => false,
     ]
-    if !isempty(regularization_exprs)
-        reg_funcs = Tuple(__pygaussfsbp_parse_functions(regularization_exprs))
-        push!(kwargs, :regularization_functions => reg_funcs)
-    end
     return Base.invokelatest(
         SummationByPartsOperatorsExtra.function_space_operator,
         funcs,
@@ -649,9 +763,24 @@ function __pygaussfsbp_extra_operator_arrays(op)
     return (
         Array{Float64}(Matrix(op)),
         Float64.(diag(SummationByPartsOperators.mass_matrix(op))),
-        Float64.(SummationByPartsOperators.left_boundary_weight(op)),
-        Float64.(SummationByPartsOperators.right_boundary_weight(op)),
+        Float64.(SummationByPartsOperators.grid(op)),
     )
+end
+
+function __pygaussfsbp_extra_basis_residual(op, func_exprs)
+    funcs = __pygaussfsbp_parse_functions(func_exprs)
+    nodes = SummationByPartsOperators.grid(op)
+    D = Matrix(op)
+    residual = 0.0
+    for f in funcs
+        values = [Base.invokelatest(f, x) for x in nodes]
+        derivatives = [
+            ForwardDiff.derivative(x -> Base.invokelatest(f, x), node)
+            for node in nodes
+        ]
+        residual = max(residual, maximum(abs.(D * values - derivatives)))
+    end
+    return Float64(residual)
 end
 
 const __pygaussfsbp_true = true
