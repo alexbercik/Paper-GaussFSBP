@@ -106,12 +106,20 @@ BSR is not the default because local enrichment can produce different element no
 
 ## Layout
 
-Source modules live under the `src` package. Import from the repo root, e.g.
-`from src.assembly import assemble_system, calc_LHS, calc_RHS`.
+Core solver modules live under the `src` package. Cross-language bridge code
+and local Julia dependency wiring live under root-level `lib`. Import from the
+repo root, e.g. `from src.assembly import assemble_system, calc_LHS, calc_RHS`.
 
 ```
 Paper-GaussFSBP/
   pyproject.toml
+  lib/
+    __init__.py
+    julia_operators.py
+    julia/
+      Project.toml
+      Manifest.toml
+    GaussFSBP -> ../../GaussFSBP
   src/
     __init__.py
     operator_library.py
@@ -142,11 +150,19 @@ python examples/smooth_sanity_check.py
 
 ## Julia operator builders
 
-The optional Julia-backed operator builders use one shared Julia environment at
-`src/lib/julia`. Keep `src/lib/GaussFSBP` as a local symlink to the GaussFSBP
-Julia checkout, then instantiate the shared environment:
+The optional Julia-backed operator builders use one shared Julia
+environment at `lib/julia`. Wherever you choose to install the repo `GaussFSBP`, 
+keep a symlink to that repo in `lib/GaussFSBP`. That repo also needs it's own
+local pointer to a `lib/GeneralizedGauss.jl` repo (see README therein).
 
 ```bash
-julia --project=src/lib/julia -e 'import Pkg; Pkg.instantiate()'
-julia --project=src/lib/julia -e 'using GaussFSBP, SummationByPartsOperatorsExtra'
+ln -s [path to GaussFSBP] lib/GaussFSBP  # only if the symlink is missing
+julia --project=lib/julia -e 'import Pkg; Pkg.instantiate()'
+julia --project=lib/julia -e 'using GaussFSBP, SummationByPartsOperatorsExtra'
 ```
+
+When Python loads Julia through `juliacall`, the Julia executable is chosen
+before the repository code can call `Pkg.activate`. The bridge configures
+`juliacall` to use the `julia` executable visible on Python's `PATH`; set
+`PYTHON_JULIACALL_EXE=/path/to/julia` before running Python if a different
+Julia should be embedded.

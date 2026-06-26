@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-import src.lib.julia_operators as julia_operators
-from src.lib.julia_operators import (
+import lib.julia_operators as julia_operators
+from lib.julia_operators import (
     JuliaBasis,
     JuliaOperatorError,
     _infer_op_type,
@@ -168,6 +171,59 @@ def test_build_operator_print_options_are_rejected_before_julia_loads() -> None:
             print_operator=True,
             print_num_digits=-1,
         )
+
+
+def test_configure_juliacall_startup_uses_path_julia(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        julia_operators.shutil,
+        "which",
+        lambda name: "/opt/julia/bin/julia" if name == "julia" else None,
+    )
+
+    project = tmp_path / "julia"
+    with patch.dict(os.environ, {}, clear=True):
+        julia_operators._configure_juliacall_startup(project)
+
+        assert os.environ["JULIA_PROJECT"] == str(project)
+        assert os.environ["PYTHON_JULIACALL_EXE"] == "/opt/julia/bin/julia"
+        assert os.environ["PYTHON_JULIACALL_PROJECT"] == str(project)
+
+
+def test_configure_juliacall_startup_respects_existing_exe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        julia_operators.shutil,
+        "which",
+        lambda name: pytest.fail("PATH lookup should not run for explicit Julia"),
+    )
+
+    project = tmp_path / "julia"
+    env = {
+        "PYTHON_JULIACALL_EXE": "/custom/julia",
+        "PYTHON_JULIACALL_PROJECT": "/custom/project",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        julia_operators._configure_juliacall_startup(project)
+
+        assert os.environ["JULIA_PROJECT"] == str(project)
+        assert os.environ["PYTHON_JULIACALL_EXE"] == "/custom/julia"
+        assert os.environ["PYTHON_JULIACALL_PROJECT"] == str(project)
+
+
+def test_configure_juliacall_startup_requires_julia_exe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(julia_operators.shutil, "which", lambda name: None)
+
+    with patch.dict(os.environ, {}, clear=True):
+        with pytest.raises(JuliaOperatorError, match="requires a Julia executable"):
+            julia_operators._configure_juliacall_startup(tmp_path / "julia")
 
 
 def test_build_operator_from_sbp_extra_converts_arrays(

@@ -34,12 +34,12 @@ from .operators import (
     check_sbp_property,
     validate_operator_dict,
 )
-from .lib import (
+from lib import (
     JuliaBasis,
     JuliaOperatorError,
+    build_julia_operator,
     build_operator_from_julia,
     build_operator_from_sbp_extra,
-    build_julia_operator,
     legendre_basis_factory,
     print_fsbp_operator_python,
 )

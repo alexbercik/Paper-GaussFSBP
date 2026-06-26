@@ -5,10 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import os
+import shutil
 
 import numpy as np
-
-from ..operators import Operator, VALID_OP_TYPES
 
 
 _JULIA_PROJECT = Path(__file__).parent.joinpath("julia")
@@ -237,6 +236,8 @@ def build_operator_from_julia(
     jl = _load_julia()
     interval, nodes, D, H, tL, tR = jl.__pygaussfsbp_operator_arrays(fsbp)
 
+    from src.operators import Operator
+
     return Operator(
         name=None,
         basis=list(op_basis.labels),
@@ -285,6 +286,8 @@ def build_operator_from_sbp_extra(
     functions = _as_string_tuple(functions, "functions")
     basis_labels = _as_string_tuple(basis_labels, "basis_labels")
     quad_basis_labels = _as_string_tuple(quad_basis_labels, "quad_basis_labels")
+    from src.operators import Operator, VALID_OP_TYPES
+
     if len(functions) != len(basis_labels):
         raise ValueError("functions and basis_labels must have the same length")
     if not quad_basis_labels:
@@ -508,9 +511,7 @@ def _load_julia() -> Any:
     if not project.exists():
         raise JuliaOperatorError(f"Julia project not found at {project}")
 
-    # juliacall reads JULIA_PROJECT at startup. Activating again below keeps the
-    # helper correct even if another environment was already selected.
-    os.environ.setdefault("JULIA_PROJECT", str(project))
+    _configure_juliacall_startup(project)
     try:
         from juliacall import Main as jl
     except ImportError as exc:
@@ -518,6 +519,20 @@ def _load_julia() -> Any:
             "Julia operator construction requires the optional dependency "
             "`juliacall`. Install it with `pip install -e '.[julia]'`."
         ) from exc
+    except Exception as exc:
+        raise JuliaOperatorError(
+            "JuliaCall failed to initialize Julia. Make sure Julia 1.12 or "
+            "newer is installed and visible to Python, or set "
+            "PYTHON_JULIACALL_EXE=/path/to/julia before running Python."
+        ) from exc
+
+    if not jl.seval('VERSION >= v"1.12"'):
+        version = jl.seval("string(VERSION)")
+        raise JuliaOperatorError(
+            "Julia operator construction requires Julia 1.12 or newer because "
+            f"the checked-in Julia manifest was generated with Julia 1.12; "
+            f"JuliaCall embedded Julia {version}."
+        )
 
     jl.seval("import Pkg")
     jl.Pkg.activate(str(project))
@@ -537,6 +552,29 @@ using SummationByPartsOperatorsExtra
     _define_julia_helpers(jl)
     _JL = jl
     return jl
+
+
+def _configure_juliacall_startup(project: Path) -> None:
+    """Set JuliaCall startup options before importing `juliacall`."""
+    # juliacall chooses the Julia executable before Python code can call
+    # Pkg.activate. Point it at the same Julia that the Python process sees on
+    # PATH so juliaup or a cached JuliaPkg environment cannot silently select an
+    # older Julia.
+    julia_exe = os.environ.get("PYTHON_JULIACALL_EXE")
+    if julia_exe is None:
+        julia_exe = shutil.which("julia")
+    if julia_exe is None:
+        raise JuliaOperatorError(
+            "Julia operator construction requires a Julia executable. Install "
+            "Julia 1.12 or newer, put `julia` on PATH, or set "
+            "PYTHON_JULIACALL_EXE=/path/to/julia before running Python."
+        )
+
+    # juliacall reads the executable and project at startup. Set both together
+    # so a stale global JuliaCall project cannot override this repo's manifest.
+    os.environ["PYTHON_JULIACALL_EXE"] = julia_exe
+    os.environ["PYTHON_JULIACALL_PROJECT"] = str(project)
+    os.environ["JULIA_PROJECT"] = str(project)
 
 
 def _define_julia_helpers(jl: Any) -> None:

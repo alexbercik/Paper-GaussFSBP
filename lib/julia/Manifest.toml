@@ -741,7 +741,7 @@ version = "1.0.2"
 
 [[deps.GaussFSBP]]
 deps = ["GeneralizedGauss", "GenericLinearAlgebra", "LinearAlgebra", "NOMAD", "Printf"]
-path = "../../../../GaussFSBP"
+path = "../GaussFSBP"
 uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 version = "0.1.0"
 
@@ -753,7 +753,7 @@ version = "0.5.8"
 
 [[deps.GeneralizedGauss]]
 deps = ["BasisFunctions", "DomainSets", "LinearAlgebra", "NLsolve", "NOMAD", "Random"]
-path = "../../../../GaussFSBP/lib/GeneralizedGauss.jl"
+path = "../GaussFSBP/lib/GeneralizedGauss.jl"
 uuid = "05e31603-d96d-5828-bb71-68ab99de2396"
 version = "0.1.0"
 
