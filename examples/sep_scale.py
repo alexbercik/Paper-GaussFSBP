@@ -1,24 +1,30 @@
 from __future__ import annotations
-
+import os
+os.environ["JULIA_PROJECT"] = "@."
 import dataclasses
 import json
 from pathlib import Path
 import sys
+import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.linalg
-import scipy.special
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src import JuliaBasis, build_operator_from_julia
+from src import (
+    JuliaBasis,
+    JuliaOperatorError,
+    build_operator_from_julia,
+    check_sbp_property,
+    legendre_basis_factory,
+)
 from src.assembly import assemble_system
 from src.elements import Element1D, make_uniform_elements
 from src.norms import convergence_rate, global_H_error
-from src.operator_library import OperatorSpec, operator_from_spec
 from src.operators import Operator
 from src.plotting import (
     exact_profile_on_domain,
@@ -28,7 +34,9 @@ from src.plotting import (
 )
 from src.solve import solve_steady
 
-CACHE_FILE = Path(__file__).parent / "operator_cache.json"
+# Pointing directly to the shared cache architecture from dyn_mixed.py
+CACHE_FILE = Path(__file__).parent / "scalesep_operator_cache_v2.json"
+
 
 def load_cache() -> dict:
     if CACHE_FILE.exists() and CACHE_FILE.stat().st_size > 0:
@@ -39,117 +47,167 @@ def load_cache() -> dict:
             return {}
     return {}
 
+
 def save_cache(cache: dict) -> None:
     tmp_file = CACHE_FILE.with_suffix(".json.tmp")
     with open(tmp_file, "w") as f:
         json.dump(cache, f, indent=4)
     tmp_file.replace(CACHE_FILE)
 
-def get_lgl_nodes(num_nodes: int) -> np.ndarray:
-    p_deriv = scipy.special.legendre(num_nodes - 1).deriv()
-    interior_roots = p_deriv.roots
-    roots_ref = np.concatenate([[-1.0], np.sort(interior_roots), [1.0]])
-    return 0.5 * (roots_ref + 1.0)
 
-def exponential_bases_p3(beta: float) -> tuple[JuliaBasis, JuliaBasis]:
-    beta_str = f'BigFloat("{beta!r}")'
-    exp_b = f"x -> exp({beta_str} * x)"
-
-    op_basis = JuliaBasis(
-        labels=["1", "x", "x^2", f"exp({beta:g}x)"],
-        functions=["x -> one(x)", "x -> x", "x -> x^2", exp_b],
-        derivatives=["x -> zero(x)", "x -> one(x)", "x -> 2*x", f"x -> {beta_str} * exp({beta_str} * x)"],
+def legendre_basis(num_functions: int) -> JuliaBasis:
+    if num_functions < 1:
+        raise ValueError("num_functions must be positive")
+    return JuliaBasis(
+        labels=[f"P_{degree}(x)" for degree in range(num_functions)],
+        factory=legendre_basis_factory(num_functions),
     )
 
+
+def polynomial_bases(degree: int, operator_type: str) -> tuple[JuliaBasis, JuliaBasis]:
+    if degree < 1:
+        raise ValueError("degree must be at least 1")
+    op_basis = legendre_basis(degree + 1)
+    if operator_type == "closed":
+        quad_basis = legendre_basis(2 * degree)
+    elif operator_type == "open":
+        quad_basis = legendre_basis(2 * degree + 2)
+    else:
+        raise ValueError("op_type must be 'open' or 'closed'")
+    return op_basis, quad_basis
+
+
+def exponential_bases(
+    p: int,
+    alpha: float,
+    alpha_divisor: int = 1,
+) -> tuple[JuliaBasis, JuliaBasis]:
+    if p < 0:
+        raise ValueError("p must be nonnegative")
+    
+    alpha_text = repr(alpha)
+    scaled_alpha_text = alpha_text if alpha_divisor == 1 else f"({alpha_text}/{alpha_divisor})"
+    julia_alpha = f'(parse(T, "{alpha_text}") / {alpha_divisor})'
+
+    exp_function = f"let a = {julia_alpha}; x -> exp(a * x); end"
+    exp_derivative = f"let a = {julia_alpha}; x -> a * exp(a * x); end"
+    
+    op_basis = JuliaBasis(
+        labels=[*[f"P_{degree}(x)" for degree in range(p + 1)], f"exp({scaled_alpha_text}x)"],
+        factory=legendre_basis_factory(p + 1, additional_functions=[exp_function], additional_derivatives=[exp_derivative]),
+    )
+
+    num_quad_polynomials = 2 * p
+    num_quad_functions = num_quad_polynomials + (p + 1) + 1
+    if num_quad_functions % 2 != 0:
+        num_quad_polynomials += 1
+
+    quad_labels = [f"P_{degree}(x)" for degree in range(num_quad_polynomials)]
+    additional_functions, additional_derivatives = [], []
+
+    for degree in range(p + 1):
+        power = "one(x)" if degree == 0 else f"x^{degree}"
+        quad_labels.append(f"x^{degree} exp({scaled_alpha_text}x)")
+        additional_functions.append(f"let a = {julia_alpha}; x -> {power} * exp(a * x); end")
+        deriv = "a * exp(a * x)" if degree == 0 else f"({degree} * x^{degree - 1} + a * x^{degree}) * exp(a * x)"
+        additional_derivatives.append(f"let a = {julia_alpha}; x -> {deriv}; end")
+
+    quad_labels.append(f"exp(2 * {scaled_alpha_text}x)")
+    additional_functions.append(f"let a = {julia_alpha}; x -> exp(2 * a * x); end")
+    additional_derivatives.append(f"let a = {julia_alpha}; x -> 2 * a * exp(2 * a * x); end")
+
     quad_basis = JuliaBasis(
-        labels=["1", "x", "x^2", "x^3", f"exp({beta:g}x)", f"x exp({beta:g}x)", f"x^2 exp({beta:g}x)", f"exp(2*{beta:g}x)"],
-        functions=[
-            "x -> one(x)", "x -> x", "x -> x^2", "x -> x^3",
-            exp_b, f"x -> x * exp({beta_str} * x)", f"x -> x^2 * exp({beta_str} * x)", f"x -> exp(2 * {beta_str} * x)"
-        ],
-        derivatives=[
-            "x -> zero(x)", "x -> one(x)", "x -> 2*x", "x -> 3*x^2",
-            f"x -> {beta_str} * exp({beta_str} * x)",
-            f"x -> (one(x) + {beta_str} * x) * exp({beta_str} * x)",
-            f"x -> (2*x + {beta_str} * x^2) * exp({beta_str} * x)",
-            f"x -> 2 * {beta_str} * exp(2 * {beta_str} * x)"
-        ],
+        labels=quad_labels,
+        factory=legendre_basis_factory(num_quad_polynomials, additional_functions=additional_functions, additional_derivatives=additional_derivatives),
     )
     return op_basis, quad_basis
 
-def exponential_bases_p4(beta: float) -> tuple[JuliaBasis, JuliaBasis]:
-    beta_str = f'BigFloat("{beta!r}")'
-    exp_b = f"x -> exp({beta_str} * x)"
 
-    op_basis = JuliaBasis(
-        labels=["1", "x", "x^2", "x^3", f"exp({beta:g}x)"],
-        functions=["x -> one(x)", "x -> x", "x -> x^2", "x -> x^3", exp_b],
-        derivatives=["x -> zero(x)", "x -> one(x)", "x -> 2*x", "x -> 3*x^2", f"x -> {beta_str} * exp({beta_str} * x)"],
-    )
-
-    quad_basis = JuliaBasis(
-        labels=["1", "x", "x^2", "x^3", "x^4", "x^5", f"exp({beta:g}x)", f"x exp({beta:g}x)", f"x^2 exp({beta:g}x)", f"x^3 exp({beta:g}x)", f"exp(2*{beta:g}x)"],
-        functions=[
-            "x -> one(x)", "x -> x", "x -> x^2", "x -> x^3", "x -> x^4", "x -> x^5",
-            exp_b, f"x -> x * exp({beta_str} * x)", f"x -> x^2 * exp({beta_str} * x)", f"x -> x^3 * exp({beta_str} * x)", f"x -> exp(2 * {beta_str} * x)"
-        ],
-        derivatives=[
-            "x -> zero(x)", "x -> one(x)", "x -> 2*x", "x -> 3*x^2", "x -> 4*x^3", "x -> 5*x^4",
-            f"x -> {beta_str} * exp({beta_str} * x)",
-            f"x -> (one(x) + {beta_str} * x) * exp({beta_str} * x)",
-            f"x -> (2*x + {beta_str} * x^2) * exp({beta_str} * x)",
-            f"x -> (3*x^2 + {beta_str} * x^3) * exp({beta_str} * x)",
-            f"x -> 2 * {beta_str} * exp(2 * {beta_str} * x)"
-        ],
-    )
-    return op_basis, quad_basis
-
-def get_min_norm_exp_operator(h: float, order: int, pe: float) -> Operator:
-    beta = h * pe
-    numnodes = order + 2
-    cache_key = f"h{h:g}_beta{beta:g}_min_norm_p{order}_closed_{numnodes}nodes"
+def build_exponential_operator(
+    p: int,
+    alpha: float,
+    *,
+    alpha_divisor: int = 1,
+    optimize: bool,
+    opt_method: str = "simultaneous",
+    op_type: str = "closed",
+) -> Operator:
+    cache_key = f"p{p}_alpha{repr(alpha)}_div{alpha_divisor}_opt{optimize}_{opt_method}_{op_type}"
     cache = load_cache()
 
     if cache_key in cache:
         data = cache[cache_key]
         return Operator(
-            name=f"EXP_{cache_key}",
-            basis=data["basis"],
-            quad_basis=data["quad_basis"],
-            op_type=data["op_type"],
-            selector=data.get("selector", 0),
-            interval=np.array(data["interval"]),
-            nodes=np.array(data["nodes"]),
-            D=np.array(data["D"]),
-            H=np.array(data["H"]),
-            tL=np.array(data["tL"]),
-            tR=np.array(data["tR"])
+            name=f"EXP_{cache_key}", basis=data["basis"], quad_basis=data["quad_basis"],
+            op_type=data["op_type"], selector=data.get("selector", 0),
+            interval=np.array(data["interval"]), nodes=np.array(data["nodes"]),
+            D=np.array(data["D"]), H=np.array(data["H"]),
+            tL=np.array(data["tL"]), tR=np.array(data["tR"])
         )
 
-    print(f"  -> Cache miss. Generating min-norm p{order} operator for h={h:g} (beta={beta:g})...")
-    
-    if order == 3:
-        op_basis, quad_basis = exponential_bases_p3(beta)
-    else:
-        op_basis, quad_basis = exponential_bases_p4(beta)
+    print(f"  -> Cache miss. Generating EXP operator (p={p}, div={alpha_divisor}, opt={optimize})...")
+    op_basis, quad_basis = exponential_bases(p, alpha, alpha_divisor)
+    principal = "upper" if op_type == "closed" else "lower"
+    julia_alpha = f'(parse(T, "{repr(alpha)}") / {alpha_divisor})'
 
-    nodes = get_lgl_nodes(numnodes)
+    opt_funcs = (
+        f"[x -> x^{p + 1}, let a = {julia_alpha}; x -> x * exp(a * x); end, "
+        f"let a = {julia_alpha}; x -> x^2 * exp(a * x); end, let a = {julia_alpha}; x -> exp(2 * a * x); end]"
+    )
+    opt_derivs = (
+        f"[x -> {p + 1} * x^{p}, let a = {julia_alpha}; x -> (1 + a * x) * exp(a * x); end, "
+        f"let a = {julia_alpha}; x -> (2 * x + a * x^2) * exp(a * x); end, let a = {julia_alpha}; x -> 2 * a * exp(2 * a * x); end]"
+    )
 
     operator = build_operator_from_julia(
         op_basis, quad_basis, interval=(0.0, 1.0), precision="bigfloat",
-        digits=64, orthogonalize=True, principal="upper",
-        quad_kwargs={"lost_digits": 8}, use_optimization=False
+        digits=42, orthogonalize=True, principal=principal,
+        use_optimization=optimize, opt_method=opt_method,
+        test_functions=opt_funcs, test_derivatives=opt_derivs,
+        test_weights=[1, 1, 1, 4], extrapolation_objective_weights=[1.0, 0.1], S_objective_weights=[1.0, 0.1]
     )
 
     cache[cache_key] = {
-        "h": h, "beta": beta, "node_type": "opt",
-        "basis": op_basis.labels, "quad_basis": quad_basis.labels,
-        "op_type": "closed", "selector": 0, "interval": [0.0, 1.0],
-        "nodes": operator.nodes.tolist(), "D": operator.D.tolist(),
-        "H": operator.H.tolist(), "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
+        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": operator.op_type,
+        "selector": 0, "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
+        "D": operator.D.tolist(), "H": operator.H.tolist(),
+        "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
     }
     save_cache(cache)
-    return dataclasses.replace(operator, name=f"EXP_{cache_key}", op_type="closed")
+    return dataclasses.replace(operator, name=f"EXP_{cache_key}")
+
+
+def build_polynomial_operator(degree: int, op_type: str = "closed") -> Operator:
+    cache_key = f"poly_p{degree}_{op_type}"
+    cache = load_cache()
+
+    if cache_key in cache:
+        data = cache[cache_key]
+        return Operator(
+            name=f"POLY_{cache_key}", basis=data["basis"], quad_basis=data["quad_basis"],
+            op_type=data["op_type"], selector=0, interval=np.array(data["interval"]),
+            nodes=np.array(data["nodes"]), D=np.array(data["D"]), H=np.array(data["H"]),
+            tL=np.array(data["tL"]), tR=np.array(data["tR"])
+        )
+
+    print(f"  -> Cache miss. Generating {op_type.upper()} polynomial p{degree} operator...")
+    op_basis, quad_basis = polynomial_bases(degree, op_type)
+    principal = "upper" if op_type == "closed" else "lower"
+
+    operator = build_operator_from_julia(
+        op_basis, quad_basis, interval=(0.0, 1.0), precision="bigfloat",
+        digits=42, orthogonalize=True, principal=principal
+    )
+
+    cache[cache_key] = {
+        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": operator.op_type,
+        "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
+        "D": operator.D.tolist(), "H": operator.H.tolist(),
+        "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
+    }
+    save_cache(cache)
+    return dataclasses.replace(operator, name=f"POLY_{cache_key}")
+
 
 DOMAIN = (0.0, 1.0)
 ELEMENT_COUNTS = [8, 16, 32, 64, 80, 100]
@@ -160,26 +218,34 @@ PLOT_SOLS = True
 
 RUNS = [
     {
-        "label": "LGL p3",
-        "spec": OperatorSpec("LGLp3"),
-        "min_norm": False,
-        "order": 3,
+        "label": r"$\mathcal{P}_4$ LGL",
+        "poly_order": 4,
+        "op_type": "closed",
     },
     {
-        "label": "Min-Norm p3",
-        "min_norm": True,
-        "order": 3,
+        "label": r"$\mathcal{P}_5$ LGL",
+        "poly_order": 5,
+        "op_type": "closed",
     },
-    # {
-    #     "label": "Min-Norm p4",
-    #     "min_norm": True,
-    #     "order": 4,
-    # },
+    {
+        "label": r"$\mathcal{P}_3 + e^{\alpha x}$ (optimized)",
+        "exp_order": 3,
+        "op_type": "closed",
+        "optimized": True,
+    },
+    {
+        "label": r"$\mathcal{P}_4 + e^{\alpha x}$ (optimized)",
+        "exp_order": 4,
+        "op_type": "closed",
+        "optimized": True,
+    },
 ]
+
 
 def roughness_exact(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     return 0.5 * (-x_arr**2 + x_arr) * np.sin(5.0 * np.pi * x_arr)
+
 
 def roughness_f(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
@@ -187,11 +253,13 @@ def roughness_f(x: np.ndarray | float) -> np.ndarray:
     term2 = 2.5 * np.pi * (-x_arr**2 + x_arr) * np.cos(5.0 * np.pi * x_arr)
     return term1 + term2
 
+
 def singularity_exact(x: np.ndarray | float, pe: float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     num = np.exp(pe * (x_arr - 1.0)) - np.exp(-pe)
     den = 1.0 - np.exp(-pe)
     return (num / den) - x_arr + 1.0
+
 
 def singularity_f(x: np.ndarray | float, pe: float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
@@ -199,27 +267,43 @@ def singularity_f(x: np.ndarray | float, pe: float) -> np.ndarray:
     den = 1.0 - np.exp(-pe)
     return (num / den) - 1.0
 
+
 def u_exact(x: np.ndarray | float, pe: float) -> np.ndarray:
     return roughness_exact(x) + singularity_exact(x, pe)
+
 
 def mixed_f(x: np.ndarray | float, pe: float) -> np.ndarray:
     return roughness_f(x) + singularity_f(x, pe)
 
+
 def operators_for_mesh(run: dict[str, object], num_elements: int, pe: float) -> list[Operator]:
-    h = (DOMAIN[1] - DOMAIN[0]) / num_elements
-    if run.get("min_norm"):
-        op = get_min_norm_exp_operator(h=h, order=int(run["order"]), pe=pe)
+    if "poly_order" in run:
+        op = build_polynomial_operator(run["poly_order"], run.get("op_type", "closed"))
+    elif "exp_order" in run:
+        op = build_exponential_operator(
+            p=run["exp_order"],
+            alpha=pe,
+            alpha_divisor=num_elements,
+            optimize=run.get("optimized", True),
+            op_type=run.get("op_type", "closed"),
+        )
     else:
-        op = operator_from_spec(run["spec"])
+        raise ValueError("Unknown run specification in RUNS list.")
+    
+    if not check_sbp_property(op, print_report=False):
+        warnings.warn(f"Operator {op.name} violates SBP property on {num_elements} elements!", RuntimeWarning)
+        
     return [op] * num_elements
+
 
 def solve_on_mesh(
     run: dict[str, object], num_elements: int, pe: float, exact_fun: callable, f_fun: callable
 ) -> tuple[list[Element1D], np.ndarray]:
     left_val = float(exact_fun(DOMAIN[0], pe))
+    ops = operators_for_mesh(run, num_elements, pe)
+    
     elements = make_uniform_elements(
-        domain=DOMAIN, num_elements=num_elements,
-        operators=operators_for_mesh(run, num_elements, pe),
+        domain=DOMAIN, num_elements=num_elements, operators=ops,
         a_fun=lambda x: np.ones_like(x, dtype=float),
         b_fun=lambda x: np.ones_like(x, dtype=float),
         f_fun=lambda x: f_fun(x, pe),
@@ -228,6 +312,7 @@ def solve_on_mesh(
     system = assemble_system(elements, left_bc_fun=lambda _x: left_val, sat_type=SAT_TYPE)
     u, _ = solve_steady(system.matrix, system.rhs)
     return system.elements, u
+
 
 def run_convergence(
     run: dict[str, object], pe: float, exact_fun: callable, f_fun: callable
@@ -259,10 +344,13 @@ def run_convergence(
 
     return np.array(dofs, dtype=float), errors_arr, err_32, overall_rate
 
+
 if __name__ == "__main__":
     STEEPNESS_CONFIGS = [
         {"label": "eps=0.0125", "pe": 80.0},
         {"label": "eps=0.0250", "pe": 40.0},
+        {"label": "eps=0.0500", "pe": 20.0},
+        {"label": "eps=0.1000", "pe": 10.0},
     ]
 
     EXPERIMENTS = [
