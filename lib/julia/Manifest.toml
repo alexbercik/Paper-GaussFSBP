@@ -1,6 +1,6 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.3"
+julia_version = "1.12.6"
 manifest_format = "2.0"
 project_hash = "99c8389a187ae6cd6edd6210696ea7be6b8b237f"
 
@@ -195,9 +195,9 @@ version = "0.1.6"
 
 [[deps.BlockArrays]]
 deps = ["ArrayLayouts", "FillArrays", "LinearAlgebra"]
-git-tree-sha1 = "0f606a9894e2bcda541ceb82a91a13c5d450ed97"
+git-tree-sha1 = "8aa3a63ca1da72b5282db3017e14b33faed9ce97"
 uuid = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
-version = "1.9.3"
+version = "1.9.4"
 weakdeps = ["Adapt", "BandedMatrices"]
 
     [deps.BlockArrays.extensions]
@@ -741,7 +741,7 @@ version = "1.0.2"
 
 [[deps.GaussFSBP]]
 deps = ["GeneralizedGauss", "GenericLinearAlgebra", "LinearAlgebra", "NOMAD", "Printf"]
-path = "../GaussFSBP"
+path = "/Users/lisa/grad/phd/proj/Paper-GaussFSBP/src/lib/GaussFSBP/"
 uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 version = "0.1.0"
 
@@ -753,7 +753,7 @@ version = "0.5.8"
 
 [[deps.GeneralizedGauss]]
 deps = ["BasisFunctions", "DomainSets", "LinearAlgebra", "NLsolve", "NOMAD", "Random"]
-path = "../GaussFSBP/lib/GeneralizedGauss.jl"
+path = "/Users/lisa/grad/phd/proj/Paper-GaussFSBP/src/lib/GaussFSBP/lib/GeneralizedGauss.jl/"
 uuid = "05e31603-d96d-5828-bb71-68ab99de2396"
 version = "0.1.0"
 
@@ -904,9 +904,9 @@ version = "0.5.5"
 
 [[deps.Krylov]]
 deps = ["LinearAlgebra", "Printf", "SparseArrays"]
-git-tree-sha1 = "c4d19f51afc7ba2afbe32031b8f2d21b11c9e26e"
+git-tree-sha1 = "8dbef550a7b4102b591ff9feb279583a2285789a"
 uuid = "ba0b0d4f-ebba-5204-a429-3ac8c609bfb7"
-version = "0.10.6"
+version = "0.10.7"
 
 [[deps.LDLFactorizations]]
 deps = ["AMD", "LinearAlgebra", "SparseArrays", "Test"]
@@ -1201,7 +1201,7 @@ version = "1.2.0"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2025.5.20"
+version = "2025.11.4"
 
 [[deps.MuladdMacro]]
 git-tree-sha1 = "cac9cc5499c25554cba55cd3c30543cff5ca4fab"

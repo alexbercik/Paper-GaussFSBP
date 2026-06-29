@@ -37,7 +37,8 @@ from src.plotting import (
 )
 from src.solve import solve_steady
 
-CACHE_FILE = Path(__file__).parent / "operator_cache.json"
+# Bumping cache version to safely bypass older polluted records on disk
+CACHE_FILE = Path(__file__).parent / "operator_cache_v2.json"
 
 
 def load_cache() -> dict:
@@ -170,13 +171,13 @@ def build_exponential_operator(
     )
 
     cache[cache_key] = {
-        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": op_type,
+        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": operator.op_type,
         "selector": 0, "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
         "D": operator.D.tolist(), "H": operator.H.tolist(),
         "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
     }
     save_cache(cache)
-    return dataclasses.replace(operator, name=f"EXP_{cache_key}", op_type=op_type)
+    return dataclasses.replace(operator, name=f"EXP_{cache_key}")
 
 
 def _bernstein_basis_on_unit_interval(p: int) -> tuple[list[str], list[str]]:
@@ -211,7 +212,7 @@ def build_equispaced_exponential_operator(p: int, alpha: float, *, alpha_divisor
         data = cache[cache_key]
         return Operator(
             name=f"EXP_{cache_key}", basis=data["basis"], quad_basis=data["quad_basis"],
-            op_type="closed", selector=0, interval=np.array(data["interval"]),
+            op_type=data["op_type"], selector=0, interval=np.array(data["interval"]),
             nodes=np.array(data["nodes"]), D=np.array(data["D"]), H=np.array(data["H"]),
             tL=np.array(data["tL"]), tR=np.array(data["tR"])
         )
@@ -228,13 +229,13 @@ def build_equispaced_exponential_operator(p: int, alpha: float, *, alpha_divisor
     )
 
     cache[cache_key] = {
-        "basis": basis_labels, "quad_basis": basis_labels, "op_type": "closed",
+        "basis": basis_labels, "quad_basis": basis_labels, "op_type": operator.op_type,
         "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
         "D": operator.D.tolist(), "H": operator.H.tolist(),
         "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
     }
     save_cache(cache)
-    return dataclasses.replace(operator, name=f"EXP_{cache_key}", op_type="closed")
+    return dataclasses.replace(operator, name=f"EXP_{cache_key}")
 
 
 def build_polynomial_operator(degree: int, op_type: str = "closed") -> Operator:
@@ -260,13 +261,13 @@ def build_polynomial_operator(degree: int, op_type: str = "closed") -> Operator:
     )
 
     cache[cache_key] = {
-        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": op_type,
+        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": operator.op_type,
         "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
         "D": operator.D.tolist(), "H": operator.H.tolist(),
         "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
     }
     save_cache(cache)
-    return dataclasses.replace(operator, name=f"POLY_{cache_key}", op_type=op_type)
+    return dataclasses.replace(operator, name=f"POLY_{cache_key}")
 
 
 DOMAIN = (0.0, 1.0)
@@ -285,20 +286,6 @@ POLY_COEFFS = [0, 0, 0, 1]
 
 RUNS = [
     {
-        "label": r"$\mathcal{P}_2$ (LG)",
-        "poly_order": 2,
-        "op_type": "open",
-        "num_right_elements": 0,
-        "x_right_elements": None,
-    },
-    {
-        "label": r"$\mathcal{P}_2$",
-        "poly_order": 2,
-        "op_type": "closed",
-        "num_right_elements": 0,
-        "x_right_elements": None,
-    },
-    {
         "label": r"$\mathcal{P}_3$",
         "poly_order": 3,
         "op_type": "closed",
@@ -306,20 +293,27 @@ RUNS = [
         "x_right_elements": None,
     },
     {
-        "label": r"$\mathcal{P}_2 + e^{\alpha x}$, min-norm",
-        "min_norm": True,
-        "order": 2,
+        "label": r"$\mathcal{P}_4$",
+        "poly_order": 4,
+        "op_type": "closed",
         "num_right_elements": 0,
         "x_right_elements": None,
     },
     {
-        "label": r"Mixed $\mathcal{P}_3$ / $\mathcal{P}_3 + e^{\alpha x}$ ($x > 0.8$)",
-        "poly_order": 3,
+        "label": r"Mixed $\mathcal{P}_4$ / $\mathcal{P}_3 + e^{\alpha x}$ ($x > 0.8$)",
+        "poly_order": 4,
         "op_type": "closed",
-        "right_min_norm": True,
+        "right_optimized": True,
         "order": 3,
         "num_right_elements": None,
         "x_right_elements": 0.8,
+    },
+    {
+        "label": r"$\mathcal{P}_3 + e^{\alpha x}$, equispaced",
+        "sbp_extra_equispaced": True,
+        "order": 3,
+        "num_right_elements": 0,
+        "x_right_elements": None,
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$, min-norm",
@@ -335,28 +329,17 @@ RUNS = [
         "num_right_elements": 0,
         "x_right_elements": None,
     },
-    {
-        "label": r"$\mathcal{P}_3 + e^{\alpha x}$, equispaced",
-        "sbp_extra_equispaced": True,
-        "order": 3,
-        "num_right_elements": 0,
-        "x_right_elements": None,
-    }
 ]
 
 
 def _roughness_terms(x_arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    # 1. Hard-override polynomial to 1.0 (protects against global x^3 boundary crushing)
     poly = np.ones_like(x_arr)
     d_poly = np.zeros_like(x_arr)
     
-    # 2. Right-decaying envelope: flat at x=0 (preserved), drops to ~0.02 at x=1
     decay_rate = 3.8
     decay = np.exp(-decay_rate * x_arr**2)
     d_decay = -2.0 * decay_rate * x_arr * decay
     
-    # 3. Varying frequency sinusoid (Linear Chirp)
-    # Instantaneous frequency ramps from f_start (left) to f_start + f_ramp (right)
     f_start = 3.0
     f_ramp = 9.0
     
@@ -364,7 +347,7 @@ def _roughness_terms(x_arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndar
     d_phase = 2.0 * np.pi * (f_start + f_ramp * x_arr)
     
     s = np.sin(phase)
-    ds_dx = d_phase * np.cos(phase)  # Exact spatial derivative replaces raw 'c'
+    ds_dx = d_phase * np.cos(phase)
     
     return poly, d_poly, decay, d_decay, s, ds_dx
 
@@ -382,7 +365,7 @@ def singularity_f(x: np.ndarray) -> np.ndarray:
     epsilon = 0.0125
     num = (1.0 / epsilon) * np.exp((x_arr - 1.0) / epsilon)
     den = 1.0 - np.exp(-1.0 / epsilon)
-    return num / den - 1.0 #rm 1.0
+    return num / den - 1.0
 
 
 def roughness_exact(x: np.ndarray | float) -> np.ndarray:
@@ -402,7 +385,6 @@ def u_exact(x: np.ndarray | float) -> np.ndarray:
 def roughness_f(x: np.ndarray) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     poly, d_poly, decay, d_decay, s, ds_dx = _roughness_terms(x_arr)
-    # Removed (K * np.pi) multiplier because ds_dx now natively holds the variable chain rule
     return d_decay * poly * s + decay * d_poly * s + decay * poly * ds_dx
 
 
