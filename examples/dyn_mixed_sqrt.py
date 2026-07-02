@@ -35,8 +35,8 @@ from src.plotting import (
 )
 from src.solve import solve_steady
 
-# Bumping cache version to v8 to lock in pure min-norm omission logic
-CACHE_FILE = Path(__file__).parent / "operator_cache_sqrt_v8.json"
+# Cache bumped to v10 to lock in the optimized complete-basis singular operators
+CACHE_FILE = Path(__file__).parent / "operator_cache_sqrt_v10.json"
 
 
 def load_cache() -> dict:
@@ -80,8 +80,7 @@ def polynomial_bases(degree: int, operator_type: str) -> tuple[JuliaBasis, Julia
     return op_basis, quad_basis
 
 
-def sqrt_bases(p: int, k: int, op_type: str) -> tuple[JuliaBasis, JuliaBasis, str]:
-    """Generates degree-p trial space augmented by sqrt(k - x)."""
+def sqrt_bases(p: int, k: int, op_type: str, optimize: bool = True) -> tuple[JuliaBasis, JuliaBasis, str]:
     if p < 1:
         raise ValueError("p must be at least 1")
     
@@ -96,23 +95,36 @@ def sqrt_bases(p: int, k: int, op_type: str) -> tuple[JuliaBasis, JuliaBasis, st
         factory=legendre_basis_factory(p + 1, additional_functions=[sqrt_func], additional_derivatives=[sqrt_deriv]),
     )
     
+    # 1. Strict Exactness Requirements
+    num_poly = 2 * p     
+    num_sing = p + 1     
+    num_quad_required = num_poly + num_sing
+    
+    # 2. Geometric Degree of Freedom Count
     num_op = p + 2
     if op_type == "closed":
-        num_quad = 2 * num_op - 2
+        total_dofs = 2 * num_op - 2
         principal = "upper"
-        num_sing = 2
     elif op_type == "half-open-right":
-        num_quad = 2 * num_op - 1
+        total_dofs = 2 * num_op - 1
         principal = "lower"
-        num_sing = p + 1  
     elif op_type == "open":
-        num_quad = 2 * num_op
+        total_dofs = 2 * num_op
         principal = "lower"
-        num_sing = p + 1
     else:
         raise ValueError(f"Unknown op_type: {op_type}")
         
-    num_poly = num_quad - num_sing
+    # 3. Add S-Matrix degrees of freedom if optimization is active
+    if optimize:
+        total_dofs += (num_op * (num_op - 1)) // 2
+        
+    # 4. The Deadlock Check
+    if num_quad_required > total_dofs:
+        raise ValueError(
+            f"Algebraic Deadlock: A p={p} {op_type} operator with opt={optimize} only has {total_dofs} DOFs, "
+            f"but SBP exactness requires {num_quad_required} constraints."
+        )
+
     quad_labels = [f"P_{deg}(x)" for deg in range(num_poly)]
     add_funcs, add_derivs = [], []
     
@@ -165,8 +177,19 @@ def build_polynomial_operator(degree: int, op_type: str = "closed") -> Operator:
     return dataclasses.replace(operator, name=f"POLY_{cache_key}")
 
 
-def build_sqrt_operator(p: int, k: int, op_type: str = "open") -> Operator:
-    cache_key = f"sqrt_p{p}_k{k}_{op_type}_minnorm_v8"
+def build_sqrt_operator(
+    p: int, 
+    k: int, 
+    op_type: str = "open", 
+    optimize: bool | None = None, 
+    opt_method: str = "simultaneous"
+) -> Operator:
+    
+    # Force optimization to True universally for all singular root operators
+    if optimize is None:
+        optimize = True
+
+    cache_key = f"sqrt_p{p}_k{k}_{op_type}_opt{optimize}_{opt_method}_v10"
     cache = load_cache()
 
     if cache_key in cache:
@@ -178,15 +201,13 @@ def build_sqrt_operator(p: int, k: int, op_type: str = "open") -> Operator:
             tL=np.array(data["tL"]), tR=np.array(data["tR"])
         )
 
-    print(f"  -> Cache miss. Generating {op_type.upper()} SQRT min-norm operator (p={p}, k={k})...")
-    op_basis, quad_basis, principal = sqrt_bases(p, k, op_type)
+    print(f"  -> Cache miss. Generating {op_type.upper()} SQRT operator (p={p}, k={k}, opt={optimize}, method={opt_method})...")
+    op_basis, quad_basis, principal = sqrt_bases(p, k, op_type, optimize)
 
-    # Omission Strategy: Omitting 'test_functions' completely prevents PythonCall
-    # from running validator checks on None, while forcing pure min-norm objective sliding.
-    is_radau = (op_type == "half-open-right")
     opt_kwargs = {}
-    if is_radau:
+    if optimize:
         opt_kwargs["use_optimization"] = True
+        opt_kwargs["opt_method"] = opt_method
         opt_kwargs["extrapolation_objective_weights"] = [1.0, 0.1]
         opt_kwargs["S_objective_weights"] = [1.0, 0.1]
     else:
@@ -209,19 +230,14 @@ def build_sqrt_operator(p: int, k: int, op_type: str = "open") -> Operator:
 
 
 DOMAIN = (0.0, 1.0)
-ELEMENT_COUNTS = [8, 16, 32, 64, 80, 100]
+ELEMENT_COUNTS = [8, 16, 32, 64, 80, 100, 160, 200]
 COARSE_ELEMENTS = 16
 SAT_TYPE = "upwind"
 SHOW_PLOTS = True
 PLOT_SOLS = True
 ROOT_POWER = 0.5
 
-RUNS = [
-    {
-        "label": r"$\mathcal{P}_3$ (open)",
-        "poly_order": 3,
-        "op_type": "open",
-    },
+RUNS2 = [
     {
         "label": r"$\mathcal{P}_4$ (open)",
         "poly_order": 4,
@@ -232,13 +248,7 @@ RUNS = [
         "poly_order": 5,
         "op_type": "open",
     },
-    {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_4$ Radau (rightmost)",
-        "poly_order": 4,
-        "op_type": "closed",
-        "right_poly_op_type": "half-open-right",
-        "num_right_elements": 1,
-    },
+    
     {
         "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$ ($x > 0.8$, open)",
         "poly_order": 4,
@@ -249,6 +259,43 @@ RUNS = [
         "right_op_type": "open",
         "x_right_elements": 0.8,
     },
+    {
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.8$, open)",
+        "poly_order": 4,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 3,
+        "shifted": True,
+        "right_op_type": "open",
+        "x_right_elements": 0.8,
+    }
+]
+
+RUNS = [
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_5$ Radau (rightmost)",
+        "poly_order": 5,
+        "op_type": "closed",
+        "right_poly_op_type": "half-open-right",
+        "num_right_elements": 1,
+    },
+    {
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_4$ Radau (rightmost)",
+        "poly_order": 4,
+        "op_type": "closed",
+        "right_poly_op_type": "half-open-right",
+        "num_right_elements": 1,
+    },
+    # {
+    #     "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$ ($x > 0.8$, open)",
+    #     "poly_order": 4, make this closed until end?
+    #     "op_type": "closed",
+    #     "right_sqrt": True,
+    #     "sqrt_order": 3,
+    #     "shifted": False,
+    #     "right_op_type": "open",
+    #     "x_right_elements": 0.8,
+    # },
     {
         "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.8$, open)",
         "poly_order": 4,
@@ -271,25 +318,61 @@ RUNS = [
     }
 ]
 
-
-def _roughness_terms(x_arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    poly = np.ones_like(x_arr)
-    d_poly = np.zeros_like(x_arr)
-    
-    decay_rate = 3.8
-    decay = np.exp(-decay_rate * x_arr**2)
-    d_decay = -2.0 * decay_rate * x_arr * decay
-    
-    f_start = 3.0
-    f_ramp = 9.0
-    
-    phase = 2.0 * np.pi * (f_start * x_arr + 0.5 * f_ramp * x_arr**2) + (np.pi / 3.0)
-    d_phase = 2.0 * np.pi * (f_start + f_ramp * x_arr)
-    
-    s = np.sin(phase)
-    ds_dx = d_phase * np.cos(phase)
-    
-    return poly, d_poly, decay, d_decay, s, ds_dx
+# Comparison Runs for the Shifted Operator
+COMPARISON_RUNS = [
+    {
+        "label": r"Shifted $\sqrt{k-x}$ (open, simultaneous, upwind)",
+        "poly_order": 4,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 3,
+        "shifted": True,
+        "right_op_type": "open",
+        "right_optimized": True,
+        "right_opt_method": "simultaneous",
+        "sat_type": "upwind",
+        "x_right_elements": 0.8,
+    },
+    {
+        "label": r"Shifted $\sqrt{k-x}$ (open, sequential, upwind)",
+        "poly_order": 4,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 3,
+        "shifted": True,
+        "right_op_type": "open",
+        "right_optimized": True,
+        "right_opt_method": "sequential",
+        "sat_type": "upwind",
+        "x_right_elements": 0.8,
+    },
+    {
+        "label": r"Shifted $\sqrt{k-x}$ (open, simultaneous, symmetric)",
+        "poly_order": 4,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 3,
+        "shifted": True,
+        "right_op_type": "open",
+        "right_optimized": True,
+        "right_opt_method": "simultaneous",
+        "sat_type": "symmetric",
+        "x_right_elements": 0.8,
+    },
+    {
+        "label": r"Shifted $\sqrt{k-x}$ (open, sequential, symmetric)",
+        "poly_order": 4,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 3,
+        "shifted": True,
+        "right_op_type": "open",
+        "right_optimized": True,
+        "right_opt_method": "sequential",
+        "sat_type": "symmetric",
+        "x_right_elements": 0.8,
+    },
+]
 
 
 def static_component(x: np.ndarray | float) -> np.ndarray:
@@ -298,7 +381,7 @@ def static_component(x: np.ndarray | float) -> np.ndarray:
     return 3.0 * np.power(base, ROOT_POWER)
 
 
-def singularity_f(x: np.ndarray) -> np.ndarray:
+def singularity_f(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     base = np.clip(1.0 - x_arr, 1e-16, None)
     return -3.0 * ROOT_POWER * np.power(base, ROOT_POWER - 1.0)
@@ -306,8 +389,7 @@ def singularity_f(x: np.ndarray) -> np.ndarray:
 
 def roughness_exact(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
-    poly, _, decay, _, s, _ = _roughness_terms(x_arr)
-    return 1.0 - decay * poly * s
+    return 0.5 * (-x_arr**2 + x_arr) * np.sin(5.0 * np.pi * x_arr)
 
 
 def singularity_exact(x: np.ndarray | float) -> np.ndarray:
@@ -318,13 +400,14 @@ def u_exact(x: np.ndarray | float) -> np.ndarray:
     return roughness_exact(x) + singularity_exact(x)
 
 
-def roughness_f(x: np.ndarray) -> np.ndarray:
+def roughness_f(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
-    poly, d_poly, decay, d_decay, s, ds_dx = _roughness_terms(x_arr)
-    return -(d_decay * poly * s + decay * d_poly * s + decay * poly * ds_dx)
+    term1 = 0.5 * (1.0 - 2.0 * x_arr) * np.sin(5.0 * np.pi * x_arr)
+    term2 = 2.5 * np.pi * (-x_arr**2 + x_arr) * np.cos(5.0 * np.pi * x_arr)
+    return term1 + term2
 
 
-def mixed_f(x: np.ndarray) -> np.ndarray:
+def mixed_f(x: np.ndarray | float) -> np.ndarray:
     return roughness_f(x) + singularity_f(x)
 
 
@@ -367,10 +450,20 @@ def operators_for_mesh(run: dict[str, object], num_elements: int) -> list[Operat
             right_op_type = run.get("right_op_type", int_op_type)
             shifted = run.get("shifted", False)
             
+            # Extract specific optimization kwargs
+            right_optimized = run.get("right_optimized", None)
+            right_opt_method = run.get("right_opt_method", "simultaneous")
+            
             for r in range(num_right):
                 elem_from_right = num_right - 1 - r
                 k_val = elem_from_right + 1 if shifted else 1
-                ops.append(build_sqrt_operator(sqrt_deg, k_val, right_op_type))
+                ops.append(build_sqrt_operator(
+                    sqrt_deg, 
+                    k_val, 
+                    right_op_type, 
+                    optimize=right_optimized, 
+                    opt_method=right_opt_method
+                ))
         else:
             right_op_type = run.get("right_poly_op_type", int_op_type)
             right_op = build_polynomial_operator(int_deg, right_op_type)
@@ -394,7 +487,11 @@ def solve_on_mesh(
         domain=DOMAIN, num_elements=num_elements, operators=ops,
         a_fun=a_fun, b_fun=b_fun, f_fun=f_fun, exact_fun=exact_fun,
     )
-    system = assemble_system(elements, left_bc_fun=lambda _x: float(exact_fun(DOMAIN[0])), sat_type=SAT_TYPE)
+    
+    # Retrieve SAT type dynamically
+    sat_type = run.get("sat_type", SAT_TYPE)
+    system = assemble_system(elements, left_bc_fun=lambda _x: float(exact_fun(DOMAIN[0])), sat_type=sat_type)
+    
     u, _ = solve_steady(system.matrix, system.rhs, on_singular="nan")
     return system.elements, u
 
@@ -405,7 +502,8 @@ def run_convergence(
     f_fun: callable = mixed_f,
 ) -> tuple[np.ndarray, np.ndarray]:
     errors, dofs, hs = [], [], []
-    print(f"\nRun: {run['label']}, SAT: {SAT_TYPE}")
+    sat_type = run.get("sat_type", SAT_TYPE)
+    print(f"\nRun: {run['label']}, SAT: {sat_type}")
 
     sample_ops = operators_for_mesh(run, ELEMENT_COUNTS[0])
     print(f"  Interior Nodes/Elem: {sample_ops[0].nodes.size} ({sample_ops[0].op_type})")
@@ -430,38 +528,71 @@ def run_convergence(
 
 if __name__ == "__main__":
     EXPERIMENTS = [
-        {"label": "Smooth problem", "exact_fun": roughness_exact, "f_fun": roughness_f, "title": "Smooth source problem"},
-        {"label": "Singularity only", "exact_fun": singularity_exact, "f_fun": singularity_f, "title": "Singular source problem"},
-        {"label": "Mixed source", "exact_fun": u_exact, "f_fun": mixed_f, "title": "Mixed source problem"},
+        {"label": "Smooth problem", "exact_fun": roughness_exact, "f_fun": roughness_f, "title": r"Smooth source problem"},
+        {"label": "Singularity only", "exact_fun": singularity_exact, "f_fun": singularity_f, "title": r"Singular source problem ($\sqrt{1-x}$)"},
+        {"label": "Mixed source", "exact_fun": u_exact, "f_fun": mixed_f, "title": r"Mixed source problem ($\sqrt{1-x}$)"},
     ]
 
+    # --- 1. Run Original Experiments ---
     for experiment in EXPERIMENTS:
-        dof_rows, err_rows, profiles = [], [], []
+        dof_rows, err_rows, profiles, labels = [], [], [], []
         print(f"\n==========================================")
         print(f"Experiment: {experiment['label']}")
         print(f"==========================================")
         
         for run in RUNS:
-            dofs, errors = run_convergence(run, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
-            dof_rows.append(dofs)
-            err_rows.append(errors)
+            try:
+                dofs, errors = run_convergence(run, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
+                coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
+                
+                # Only append data and labels if the run succeeds completely without hitting a ValueError
+                dof_rows.append(dofs)
+                err_rows.append(errors)
+                profiles.append(profile_from_elements(coarse_elements, coarse_u))
+                labels.append(str(run["label"]))
+                
+            except ValueError as e:
+                print(f"  [Skipped] {e}")
+                continue
 
-            coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
-            profiles.append(profile_from_elements(coarse_elements, coarse_u))
-
-        labels = [str(run["label"]) for run in RUNS]
-        plot_convergence(
-            np.vstack(dof_rows), np.vstack(err_rows), labels,
-            title=f"{experiment['title']} (singularity: $\\sqrt{{1-x}}$)",
-            grid=True, skipfit_st=[1] * len(RUNS),
-        )
-
-        x_exact, u_exact_vals = exact_profile_on_domain(experiment["exact_fun"], domain=DOMAIN)
-        if PLOT_SOLS: 
-            plot_solution_profiles(
-                profiles, labels, x_exact=x_exact, u_exact=u_exact_vals,
-                title=f"{experiment['title']}, coarsest mesh ({COARSE_ELEMENTS} elements)", grid=True,
+        if dof_rows:
+            plot_convergence(
+                np.vstack(dof_rows), np.vstack(err_rows), labels,
+                title=experiment["title"],
+                grid=True, skipfit_st=[len(ELEMENT_COUNTS)-3] * len(dof_rows),
             )
+
+            x_exact, u_exact_vals = exact_profile_on_domain(experiment["exact_fun"], domain=DOMAIN)
+            if PLOT_SOLS: 
+                plot_solution_profiles(
+                    profiles, labels, x_exact=x_exact, u_exact=u_exact_vals,
+                    title=rf"{experiment['label']} solutions ({COARSE_ELEMENTS} elements)", grid=True,
+                )
+
+    # --- 2. Run SAT & Optimization Comparison Plot ---
+    print("\n" + "="*60)
+    print("Experiment: SAT Type & Optimization Comparison (Shifted Root)")
+    print("="*60)
+    
+    comp_dof_rows, comp_err_rows, comp_labels = [], [], []
+    for run in COMPARISON_RUNS:
+        try:
+            dofs, errors = run_convergence(run, exact_fun=u_exact, f_fun=mixed_f)
+            
+            comp_dof_rows.append(dofs)
+            comp_err_rows.append(errors)
+            comp_labels.append(str(run["label"]))
+            
+        except ValueError as e:
+            print(f"  [Skipped] {e}")
+            continue
+    
+    if comp_dof_rows:
+        plot_convergence(
+            np.vstack(comp_dof_rows), np.vstack(comp_err_rows), comp_labels,
+            title=r"Optimization and Flux Comparison (Mixed source: $\sqrt{1-x}$)",
+            grid=True, skipfit_st=[len(ELEMENT_COUNTS)-3] * len(comp_dof_rows),
+        )
 
     if SHOW_PLOTS:
         plt.show(block=False)

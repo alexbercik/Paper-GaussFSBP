@@ -26,8 +26,15 @@ from src.assembly import assemble_system
 from src.elements import Element1D, make_uniform_elements
 from src.norms import convergence_rate, global_H_error
 from src.operators import Operator
+from src.plotting import (
+    exact_profile_on_domain,
+    plot_convergence,
+    plot_solution_profiles,
+    profile_from_elements,
+)
 from src.solve import solve_steady
 
+# Pointing directly to the shared cache architecture from dyn_mixed.py
 CACHE_FILE = Path(__file__).parent / "scalesep_operator_cache_v2.json"
 
 
@@ -209,36 +216,31 @@ SAT_TYPE = "upwind"
 SHOW_PLOTS = True
 PLOT_SOLS = True
 
-LBL_P4 = r"$\mathcal{P}_4$ LGL"
-LBL_P5 = r"$\mathcal{P}_5$ LGL"
-LBL_P3E = r"$\mathcal{P}_3 + e^{\alpha x}$ (optimized)"
-LBL_P4E = r"$\mathcal{P}_4 + e^{\alpha x}$ (optimized)"
-
 RUNS = [
-    {"label": LBL_P4, "poly_order": 4, "op_type": "closed"},
-    {"label": LBL_P5, "poly_order": 5, "op_type": "closed"},
-    {"label": LBL_P3E, "exp_order": 3, "op_type": "closed", "optimized": True},
-    {"label": LBL_P4E, "exp_order": 4, "op_type": "closed", "optimized": True},
+    {
+        "label": r"$\mathcal{P}_4$ LGL",
+        "poly_order": 4,
+        "op_type": "closed",
+    },
+    {
+        "label": r"$\mathcal{P}_5$ LGL",
+        "poly_order": 5,
+        "op_type": "closed",
+    },
+    {
+        "label": r"$\mathcal{P}_3 + e^{\alpha x}$ (optimized)",
+        "exp_order": 3,
+        "op_type": "closed",
+        "optimized": True,
+    },
+    {
+        "label": r"$\mathcal{P}_4 + e^{\alpha x}$ (optimized)",
+        "exp_order": 4,
+        "op_type": "closed",
+        "optimized": True,
+    },
 ]
 
-def _roughness_terms(x_arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    poly = np.ones_like(x_arr)
-    d_poly = np.zeros_like(x_arr)
-    
-    decay_rate = 3.8
-    decay = np.exp(-decay_rate * x_arr**2)
-    d_decay = -2.0 * decay_rate * x_arr * decay
-    
-    f_start = 3.0
-    f_ramp = 9.0
-    
-    phase = 2.0 * np.pi * (f_start * x_arr + 0.5 * f_ramp * x_arr**2) + (np.pi / 3.0)
-    d_phase = 2.0 * np.pi * (f_start + f_ramp * x_arr)
-    
-    s = np.sin(phase)
-    ds_dx = d_phase * np.cos(phase)
-    
-    return poly, d_poly, decay, d_decay, s, ds_dx
 
 def roughness_exact(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
@@ -345,97 +347,62 @@ def run_convergence(
 
 if __name__ == "__main__":
     STEEPNESS_CONFIGS = [
-        {"pe": 80.0},
-        {"pe": 40.0},
-        {"pe": 20.0},
-        {"pe": 10.0},
+        {"label": "eps=0.0125", "pe": 80.0},
+        {"label": "eps=0.0250", "pe": 40.0},
+        {"label": "eps=0.0500", "pe": 20.0},
+        {"label": "eps=0.1000", "pe": 10.0},
     ]
 
+    EXPERIMENTS = [
+        {"label": "Mixed problem", "exact": u_exact, "f": mixed_f},
+        {"label": "Singular problem", "exact": singularity_exact, "f": singularity_f},
+        {"label": "Smooth problem", "exact": lambda x, _pe: roughness_exact(x), "f": lambda x, _pe: roughness_f(x)},
+    ]
 
-    results = {}
+    summary_records = []
 
-    print("\n==========================================")
-    print("Gathering data for the Mixed Problem...")
-    print("==========================================")
-    
-    # Run the tests only for the Mixed Source formulation
     for steep_cfg in STEEPNESS_CONFIGS:
         pe_val = float(steep_cfg["pe"])
-        results[pe_val] = {}
         
-        for run in RUNS:
-            dofs, errors, e32, r_final = run_convergence(run, pe_val, u_exact, mixed_f)
-            results[pe_val][run["label"]] = {
-                "dofs": dofs,
-                "errors": errors,
-                "e32": e32,
-                "rate": r_final
-            }
+        for exp in EXPERIMENTS:
+            dof_rows, err_rows, profiles = [], [], []
+            print(f"\n==========================================")
+            print(f"{steep_cfg['label']} | {exp['label']}")
+            print(f"==========================================")
 
+            for run in RUNS:
+                dofs, errors, e32, r_final = run_convergence(run, pe=pe_val, exact_fun=exp["exact"], f_fun=exp["f"])
+                dof_rows.append(dofs)
+                err_rows.append(errors)
 
-    print("\n" + "="*120)
-    print(f"{'Pe (Alpha)':<10s} | {'Rate Ratio (P3+E/P4)':<22s} | {'Err Ratio (P3+E/P4)':<22s} | {'Rate Ratio (P4+E/P5)':<22s} | {'Err Ratio (P4+E/P5)':<22s}")
-    print("-" * 120)
-    
-    for pe_val in STEEPNESS_CONFIGS:
-        val = float(pe_val["pe"])
-        res = results[val]
-        
-        # P3 + Exp vs P4 calculations
-        r_P4, r_P3E = res[LBL_P4]["rate"], res[LBL_P3E]["rate"]
-        e_P4, e_P3E = res[LBL_P4]["e32"], res[LBL_P3E]["e32"]
-        rate_ratio_3 = (r_P3E / r_P4) if not np.isnan(r_P4) else np.nan
-        err_ratio_3 = (e_P3E / e_P4) if e_P4 else np.nan
-        
-        # P4 + Exp vs P5 calculations
-        r_P5, r_P4E = res[LBL_P5]["rate"], res[LBL_P4E]["rate"]
-        e_P5, e_P4E = res[LBL_P5]["e32"], res[LBL_P4E]["e32"]
-        rate_ratio_4 = (r_P4E / r_P5) if not np.isnan(r_P5) else np.nan
-        err_ratio_4 = (e_P4E / e_P5) if e_P5 else np.nan
+                summary_records.append((steep_cfg["label"], exp["label"], str(run["label"]), e32, r_final))
 
-        rate_3_str = f"{rate_ratio_3:.4f}" if not np.isnan(rate_ratio_3) else "NaN"
-        err_3_str = f"{err_ratio_3:.4e}" if not np.isnan(err_ratio_3) else "NaN"
-        rate_4_str = f"{rate_ratio_4:.4f}" if not np.isnan(rate_ratio_4) else "NaN"
-        err_4_str = f"{err_ratio_4:.4e}" if not np.isnan(err_ratio_4) else "NaN"
-        
-        print(f"{val:<10.1f} | {rate_3_str:<22s} | {err_3_str:<22s} | {rate_4_str:<22s} | {err_4_str:<22s}")
-    
-    print("="*120 + "\n")
+                coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, pe_val, exact_fun=exp["exact"], f_fun=exp["f"])
+                profiles.append(profile_from_elements(coarse_elements, coarse_u))
 
+            labels = [str(r["label"]) for r in RUNS]
+            plot_convergence(
+                np.vstack(dof_rows), np.vstack(err_rows), labels,
+                title=f"{exp['label']} ({steep_cfg['label']})", grid=True, skipfit_st=[1] * len(RUNS)
+            )
 
-    if SHOW_PLOTS:
-        plt.figure(figsize=(10, 7))
-        
-        # Explicit mapping for colors (Pe) and markers (Operator type)
-        colors = {80.0: 'red', 40.0: 'blue', 20.0: 'green', 10.0: 'purple'}
-        markers = {
-            LBL_P4: 'x',
-            LBL_P3E: 'o',
-            LBL_P5: '^',
-            LBL_P4E: 's'
-        }
-
-        for pe_val in [80.0, 40.0, 20.0, 10.0]:
-            for run_label in [LBL_P4, LBL_P3E, LBL_P5, LBL_P4E]:
-                data = results[pe_val][run_label]
-                
-                plt.loglog(
-                    data["dofs"], data["errors"],
-                    marker=markers[run_label],
-                    color=colors[pe_val],
-                    linestyle='-',
-                    markersize=6,
-                    label=f"{run_label} (Pe={pe_val})"
+            x_exact, u_exact_vals = exact_profile_on_domain(lambda x: exp["exact"](x, pe_val), domain=DOMAIN)
+            if PLOT_SOLS:
+                plot_solution_profiles(
+                    profiles, labels, x_exact=x_exact, u_exact=u_exact_vals,
+                    title=f"{exp['label']} Solutions ({steep_cfg['label']})", grid=True
                 )
 
-        plt.xlabel("Total Degrees of Freedom")
-        plt.ylabel(r"Global $\mathbf{H}$-norm Error")
-        plt.title(r"Mixed Problem Convergence: Polynomial vs Enriched ($\alpha \in \{10, 20, 40, 80\}$)")
-        
-        plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
-        
-        plt.grid(True, which="both", ls="--", alpha=0.6)
-        plt.tight_layout()
+    print("\n" + "="*90)
+    print(f"{'Steepness':<30s} | {'Problem':<18s} | {'Method':<14s} | {'Error (N=32)':<12s} | {'Rate':<8s}")
+    print("="*90)
+    for row in summary_records:
+        steep, prob, meth, e32, r = row
+        r_str = f"{r:.4f}" if not np.isnan(r) else "NaN"
+        print(f"{steep:<30s} | {prob:<18s} | {meth:<14s} | {e32:<12.4e} | {r_str:<8s}")
+    print("="*90 + "\n")
+
+    if SHOW_PLOTS:
         plt.show(block=False)
-        input("Press Enter to close the plot...")
+        input("Press Enter to close all plots...")
         plt.close("all")
