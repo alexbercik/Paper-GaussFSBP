@@ -8,6 +8,7 @@ import sys
 import warnings
 
 import matplotlib.pyplot as plt
+plt.close("all")
 import numpy as np
 import scipy.linalg
 
@@ -35,9 +36,7 @@ from src.plotting import (
 )
 from src.solve import solve_steady
 
-# Cache bumped to v10 to lock in the optimized complete-basis singular operators
-CACHE_FILE = Path(__file__).parent / "operator_cache_sqrt_v10.json"
-
+CACHE_FILE = Path(__file__).parent / "operator_cache_sqrt_v11.json"
 
 def load_cache() -> dict:
     if CACHE_FILE.exists() and CACHE_FILE.stat().st_size > 0:
@@ -48,13 +47,11 @@ def load_cache() -> dict:
             return {}
     return {}
 
-
 def save_cache(cache: dict) -> None:
     tmp_file = CACHE_FILE.with_suffix(".json.tmp")
     with open(tmp_file, "w") as f:
         json.dump(cache, f, indent=4)
     tmp_file.replace(CACHE_FILE)
-
 
 def legendre_basis(num_functions: int) -> JuliaBasis:
     if num_functions < 1:
@@ -63,7 +60,6 @@ def legendre_basis(num_functions: int) -> JuliaBasis:
         labels=[f"P_{degree}(x)" for degree in range(num_functions)],
         factory=legendre_basis_factory(num_functions),
     )
-
 
 def polynomial_bases(degree: int, operator_type: str) -> tuple[JuliaBasis, JuliaBasis]:
     if degree < 1:
@@ -78,7 +74,6 @@ def polynomial_bases(degree: int, operator_type: str) -> tuple[JuliaBasis, Julia
     else:
         raise ValueError("op_type must be 'open', 'closed', or 'half-open-right'")
     return op_basis, quad_basis
-
 
 def sqrt_bases(p: int, k: int, op_type: str, optimize: bool = True) -> tuple[JuliaBasis, JuliaBasis, str]:
     if p < 1:
@@ -95,12 +90,10 @@ def sqrt_bases(p: int, k: int, op_type: str, optimize: bool = True) -> tuple[Jul
         factory=legendre_basis_factory(p + 1, additional_functions=[sqrt_func], additional_derivatives=[sqrt_deriv]),
     )
     
-    # 1. Strict Exactness Requirements
     num_poly = 2 * p     
     num_sing = p + 1     
     num_quad_required = num_poly + num_sing
     
-    # 2. Geometric Degree of Freedom Count
     num_op = p + 2
     if op_type == "closed":
         total_dofs = 2 * num_op - 2
@@ -114,11 +107,9 @@ def sqrt_bases(p: int, k: int, op_type: str, optimize: bool = True) -> tuple[Jul
     else:
         raise ValueError(f"Unknown op_type: {op_type}")
         
-    # 3. Add S-Matrix degrees of freedom if optimization is active
     if optimize:
         total_dofs += (num_op * (num_op - 1)) // 2
         
-    # 4. The Deadlock Check
     if num_quad_required > total_dofs:
         raise ValueError(
             f"Algebraic Deadlock: A p={p} {op_type} operator with opt={optimize} only has {total_dofs} DOFs, "
@@ -143,7 +134,6 @@ def sqrt_bases(p: int, k: int, op_type: str, optimize: bool = True) -> tuple[Jul
         factory=legendre_basis_factory(num_poly, additional_functions=add_funcs, additional_derivatives=add_derivs),
     )
     return op_basis, quad_basis, principal
-
 
 def build_polynomial_operator(degree: int, op_type: str = "closed") -> Operator:
     cache_key = f"poly_p{degree}_{op_type}"
@@ -176,7 +166,6 @@ def build_polynomial_operator(degree: int, op_type: str = "closed") -> Operator:
     save_cache(cache)
     return dataclasses.replace(operator, name=f"POLY_{cache_key}")
 
-
 def build_sqrt_operator(
     p: int, 
     k: int, 
@@ -184,12 +173,10 @@ def build_sqrt_operator(
     optimize: bool | None = None, 
     opt_method: str = "simultaneous"
 ) -> Operator:
-    
-    # Force optimization to True universally for all singular root operators
     if optimize is None:
         optimize = True
 
-    cache_key = f"sqrt_p{p}_k{k}_{op_type}_opt{optimize}_{opt_method}_v10"
+    cache_key = f"sqrt_p{p}_k{k}_{op_type}_opt{optimize}_{opt_method}_v11"
     cache = load_cache()
 
     if cache_key in cache:
@@ -228,7 +215,6 @@ def build_sqrt_operator(
     save_cache(cache)
     return dataclasses.replace(operator, name=f"SQRT_{cache_key}")
 
-
 DOMAIN = (0.0, 1.0)
 ELEMENT_COUNTS = [8, 16, 32, 64, 80, 100, 160, 200]
 COARSE_ELEMENTS = 16
@@ -237,7 +223,7 @@ SHOW_PLOTS = True
 PLOT_SOLS = True
 ROOT_POWER = 0.5
 
-RUNS2 = [
+RUNS3OPEN = [
     {
         "label": r"$\mathcal{P}_4$ (open)",
         "poly_order": 4,
@@ -248,7 +234,6 @@ RUNS2 = [
         "poly_order": 5,
         "op_type": "open",
     },
-    
     {
         "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$ ($x > 0.8$, open)",
         "poly_order": 4,
@@ -271,7 +256,14 @@ RUNS2 = [
     }
 ]
 
-RUNS = [
+RUNS3CLOSED = [
+    {
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_4$ Radau (rightmost)",
+        "poly_order": 4,
+        "op_type": "closed",
+        "right_poly_op_type": "half-open-right",
+        "num_right_elements": 1,
+    },
     {
         "label": r"$\mathcal{P}_5$ / $\mathcal{P}_5$ Radau (rightmost)",
         "poly_order": 5,
@@ -280,30 +272,14 @@ RUNS = [
         "num_right_elements": 1,
     },
     {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_4$ Radau (rightmost)",
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.8$, closed/Radau)",
         "poly_order": 4,
         "op_type": "closed",
-        "right_poly_op_type": "half-open-right",
-        "num_right_elements": 1,
-    },
-    # {
-    #     "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$ ($x > 0.8$, open)",
-    #     "poly_order": 4, make this closed until end?
-    #     "op_type": "closed",
-    #     "right_sqrt": True,
-    #     "sqrt_order": 3,
-    #     "shifted": False,
-    #     "right_op_type": "open",
-    #     "x_right_elements": 0.8,
-    # },
-    {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.8$, open)",
-        "poly_order": 4,
-        "op_type": "open",
         "right_sqrt": True,
         "sqrt_order": 3,
         "shifted": True,
-        "right_op_type": "open",
+        "right_op_type": "closed",
+        "rightmost_op_type": "half-open-right",
         "x_right_elements": 0.8,
     },
     {
@@ -318,87 +294,98 @@ RUNS = [
     }
 ]
 
-# Comparison Runs for the Shifted Operator
-COMPARISON_RUNS = [
+RUNS4OPEN = [
     {
-        "label": r"Shifted $\sqrt{k-x}$ (open, simultaneous, upwind)",
-        "poly_order": 4,
+        "label": r"$\mathcal{P}_5$ (open)",
+        "poly_order": 5,
+        "op_type": "open",
+    },
+    {
+        "label": r"$\mathcal{P}_6$ (open)",
+        "poly_order": 6,
+        "op_type": "open",
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{1-x}$ ($x > 0.8$, open)",
+        "poly_order": 5,
         "op_type": "open",
         "right_sqrt": True,
-        "sqrt_order": 3,
-        "shifted": True,
+        "sqrt_order": 4,
+        "shifted": False,
         "right_op_type": "open",
-        "right_optimized": True,
-        "right_opt_method": "simultaneous",
-        "sat_type": "upwind",
         "x_right_elements": 0.8,
     },
     {
-        "label": r"Shifted $\sqrt{k-x}$ (open, sequential, upwind)",
-        "poly_order": 4,
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{k-x}$ ($x > 0.8$, open)",
+        "poly_order": 5,
         "op_type": "open",
         "right_sqrt": True,
-        "sqrt_order": 3,
+        "sqrt_order": 4,
         "shifted": True,
         "right_op_type": "open",
-        "right_optimized": True,
-        "right_opt_method": "sequential",
-        "sat_type": "upwind",
         "x_right_elements": 0.8,
-    },
-    {
-        "label": r"Shifted $\sqrt{k-x}$ (open, simultaneous, symmetric)",
-        "poly_order": 4,
-        "op_type": "open",
-        "right_sqrt": True,
-        "sqrt_order": 3,
-        "shifted": True,
-        "right_op_type": "open",
-        "right_optimized": True,
-        "right_opt_method": "simultaneous",
-        "sat_type": "symmetric",
-        "x_right_elements": 0.8,
-    },
-    {
-        "label": r"Shifted $\sqrt{k-x}$ (open, sequential, symmetric)",
-        "poly_order": 4,
-        "op_type": "open",
-        "right_sqrt": True,
-        "sqrt_order": 3,
-        "shifted": True,
-        "right_op_type": "open",
-        "right_optimized": True,
-        "right_opt_method": "sequential",
-        "sat_type": "symmetric",
-        "x_right_elements": 0.8,
-    },
+    }
 ]
 
+RUNS4CLOSED = [
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_5$ Radau (rightmost)",
+        "poly_order": 5,
+        "op_type": "closed",
+        "right_poly_op_type": "half-open-right",
+        "num_right_elements": 1,
+    },
+    {
+        "label": r"$\mathcal{P}_6$ / $\mathcal{P}_6$ Radau (rightmost)",
+        "poly_order": 6,
+        "op_type": "closed",
+        "right_poly_op_type": "half-open-right",
+        "num_right_elements": 1,
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{k-x}$ ($x > 0.8$, closed/Radau)",
+        "poly_order": 5,
+        "op_type": "closed",
+        "right_sqrt": True,
+        "sqrt_order": 4,
+        "shifted": True,
+        "right_op_type": "closed",
+        "rightmost_op_type": "half-open-right",
+        "x_right_elements": 0.8,
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{1-x}$ Radau (rightmost)",
+        "poly_order": 5,
+        "op_type": "closed",
+        "right_sqrt": True,
+        "sqrt_order": 4,
+        "shifted": False,
+        "right_op_type": "half-open-right",
+        "num_right_elements": 1,
+    }
+]
+
+RUNS = RUNS4CLOSED
 
 def static_component(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     base = np.clip(1.0 - x_arr, 0.0, None)
     return 3.0 * np.power(base, ROOT_POWER)
 
-
 def singularity_f(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     base = np.clip(1.0 - x_arr, 1e-16, None)
     return -3.0 * ROOT_POWER * np.power(base, ROOT_POWER - 1.0)
 
-
 def roughness_exact(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     return 0.5 * (-x_arr**2 + x_arr) * np.sin(5.0 * np.pi * x_arr)
 
-
 def singularity_exact(x: np.ndarray | float) -> np.ndarray:
     return static_component(x)
 
-
 def u_exact(x: np.ndarray | float) -> np.ndarray:
     return roughness_exact(x) + singularity_exact(x)
-
 
 def roughness_f(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
@@ -406,18 +393,14 @@ def roughness_f(x: np.ndarray | float) -> np.ndarray:
     term2 = 2.5 * np.pi * (-x_arr**2 + x_arr) * np.cos(5.0 * np.pi * x_arr)
     return term1 + term2
 
-
 def mixed_f(x: np.ndarray | float) -> np.ndarray:
     return roughness_f(x) + singularity_f(x)
-
 
 def a_fun(x: np.ndarray) -> np.ndarray:
     return np.ones_like(x, dtype=float)
 
-
 def b_fun(x: np.ndarray) -> np.ndarray:
     return np.ones_like(x, dtype=float)
-
 
 def count_right_elements(run: dict[str, object], num_elements: int) -> int:
     num_right_elements = run.get("num_right_elements")
@@ -433,7 +416,6 @@ def count_right_elements(run: dict[str, object], num_elements: int) -> int:
     target_x = float(repr(x_right_elements))
     return int(np.count_nonzero(np.round(bounds[1:], 12) > target_x))
 
-
 def operators_for_mesh(run: dict[str, object], num_elements: int) -> list[Operator]:
     num_right = count_right_elements(run, num_elements)
     num_interior = num_elements - num_right
@@ -448,29 +430,34 @@ def operators_for_mesh(run: dict[str, object], num_elements: int) -> list[Operat
         if run.get("right_sqrt"):
             sqrt_deg = run.get("sqrt_order", 3)
             right_op_type = run.get("right_op_type", int_op_type)
+            rightmost_op_type = run.get("rightmost_op_type", right_op_type)
             shifted = run.get("shifted", False)
             
-            # Extract specific optimization kwargs
             right_optimized = run.get("right_optimized", None)
             right_opt_method = run.get("right_opt_method", "simultaneous")
             
             for r in range(num_right):
                 elem_from_right = num_right - 1 - r
                 k_val = elem_from_right + 1 if shifted else 1
+                current_op_type = rightmost_op_type if elem_from_right == 0 else right_op_type
+                
                 ops.append(build_sqrt_operator(
                     sqrt_deg, 
                     k_val, 
-                    right_op_type, 
+                    current_op_type, 
                     optimize=right_optimized, 
                     opt_method=right_opt_method
                 ))
         else:
             right_op_type = run.get("right_poly_op_type", int_op_type)
-            right_op = build_polynomial_operator(int_deg, right_op_type)
-            ops.extend([right_op] * num_right)
+            rightmost_op_type = run.get("rightmost_op_type", right_op_type)
+            
+            for r in range(num_right):
+                elem_from_right = num_right - 1 - r
+                current_op_type = rightmost_op_type if elem_from_right == 0 else right_op_type
+                ops.append(build_polynomial_operator(int_deg, current_op_type))
 
     return ops
-
 
 def solve_on_mesh(
     run: dict[str, object],
@@ -488,13 +475,11 @@ def solve_on_mesh(
         a_fun=a_fun, b_fun=b_fun, f_fun=f_fun, exact_fun=exact_fun,
     )
     
-    # Retrieve SAT type dynamically
     sat_type = run.get("sat_type", SAT_TYPE)
     system = assemble_system(elements, left_bc_fun=lambda _x: float(exact_fun(DOMAIN[0])), sat_type=sat_type)
     
     u, _ = solve_steady(system.matrix, system.rhs, on_singular="nan")
     return system.elements, u
-
 
 def run_convergence(
     run: dict[str, object],
@@ -525,7 +510,6 @@ def run_convergence(
 
     return np.array(dofs, dtype=float), np.array(errors, dtype=float)
 
-
 if __name__ == "__main__":
     EXPERIMENTS = [
         {"label": "Smooth problem", "exact_fun": roughness_exact, "f_fun": roughness_f, "title": r"Smooth source problem"},
@@ -533,7 +517,6 @@ if __name__ == "__main__":
         {"label": "Mixed source", "exact_fun": u_exact, "f_fun": mixed_f, "title": r"Mixed source problem ($\sqrt{1-x}$)"},
     ]
 
-    # --- 1. Run Original Experiments ---
     for experiment in EXPERIMENTS:
         dof_rows, err_rows, profiles, labels = [], [], [], []
         print(f"\n==========================================")
@@ -545,7 +528,6 @@ if __name__ == "__main__":
                 dofs, errors = run_convergence(run, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
                 coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
                 
-                # Only append data and labels if the run succeeds completely without hitting a ValueError
                 dof_rows.append(dofs)
                 err_rows.append(errors)
                 profiles.append(profile_from_elements(coarse_elements, coarse_u))
@@ -568,31 +550,6 @@ if __name__ == "__main__":
                     profiles, labels, x_exact=x_exact, u_exact=u_exact_vals,
                     title=rf"{experiment['label']} solutions ({COARSE_ELEMENTS} elements)", grid=True,
                 )
-
-    # --- 2. Run SAT & Optimization Comparison Plot ---
-    print("\n" + "="*60)
-    print("Experiment: SAT Type & Optimization Comparison (Shifted Root)")
-    print("="*60)
-    
-    comp_dof_rows, comp_err_rows, comp_labels = [], [], []
-    for run in COMPARISON_RUNS:
-        try:
-            dofs, errors = run_convergence(run, exact_fun=u_exact, f_fun=mixed_f)
-            
-            comp_dof_rows.append(dofs)
-            comp_err_rows.append(errors)
-            comp_labels.append(str(run["label"]))
-            
-        except ValueError as e:
-            print(f"  [Skipped] {e}")
-            continue
-    
-    if comp_dof_rows:
-        plot_convergence(
-            np.vstack(comp_dof_rows), np.vstack(comp_err_rows), comp_labels,
-            title=r"Optimization and Flux Comparison (Mixed source: $\sqrt{1-x}$)",
-            grid=True, skipfit_st=[len(ELEMENT_COUNTS)-3] * len(comp_dof_rows),
-        )
 
     if SHOW_PLOTS:
         plt.show(block=False)

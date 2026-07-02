@@ -100,7 +100,6 @@ def exponential_bases(
     num_quad_polynomials = 2 * p
     num_quad_functions = num_quad_polynomials + (p + 1) + 1
     
-    # Restored EXACT parity check from exponential_squared.py to prevent Radau topological skew
     if num_quad_functions % 2 != 0:
         num_quad_polynomials += 1
 
