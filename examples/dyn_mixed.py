@@ -8,7 +8,7 @@ import sys
 import warnings
 
 import matplotlib.pyplot as plt
-from cycler import cycler
+plt.close("all")
 import numpy as np
 import scipy.linalg
 
@@ -38,8 +38,7 @@ from src.plotting import (
 )
 from src.solve import solve_steady
 
-CACHE_FILE = Path(__file__).parent / "operator_cache_v4.json"
-
+CACHE_FILE = Path(__file__).parent / "operator_cache_v6.json"
 
 def load_cache() -> dict:
     if CACHE_FILE.exists() and CACHE_FILE.stat().st_size > 0:
@@ -50,13 +49,11 @@ def load_cache() -> dict:
             return {}
     return {}
 
-
 def save_cache(cache: dict) -> None:
     tmp_file = CACHE_FILE.with_suffix(".json.tmp")
     with open(tmp_file, "w") as f:
         json.dump(cache, f, indent=4)
     tmp_file.replace(CACHE_FILE)
-
 
 def legendre_basis(num_functions: int) -> JuliaBasis:
     if num_functions < 1:
@@ -65,7 +62,6 @@ def legendre_basis(num_functions: int) -> JuliaBasis:
         labels=[f"P_{degree}(x)" for degree in range(num_functions)],
         factory=legendre_basis_factory(num_functions),
     )
-
 
 def polynomial_bases(degree: int, operator_type: str) -> tuple[JuliaBasis, JuliaBasis]:
     if degree < 1:
@@ -78,7 +74,6 @@ def polynomial_bases(degree: int, operator_type: str) -> tuple[JuliaBasis, Julia
     else:
         raise ValueError("op_type must be 'open' or 'closed'")
     return op_basis, quad_basis
-
 
 def exponential_bases(
     p: int,
@@ -123,7 +118,6 @@ def exponential_bases(
     )
     return op_basis, quad_basis
 
-
 def build_exponential_operator(
     p: int,
     alpha: float,
@@ -131,10 +125,10 @@ def build_exponential_operator(
     *,
     alpha_divisor: int = 1,
     optimize: bool,
-    opt_method: str = "sequential",
+    opt_method: str = "simultaneous",
 ) -> Operator:
     
-    cache_key = f"exp_p{p}_alpha{repr(alpha)}_div{alpha_divisor}_opt{optimize}_{opt_method}_{op_type}_v4"
+    cache_key = f"exp_p{p}_alpha{repr(alpha)}_div{alpha_divisor}_opt{optimize}_{opt_method}_{op_type}_v6"
     cache = load_cache()
 
     if cache_key in cache:
@@ -179,7 +173,6 @@ def build_exponential_operator(
     save_cache(cache)
     return dataclasses.replace(operator, name=f"EXP_{cache_key}")
 
-
 def _bernstein_basis_on_unit_interval(p: int) -> tuple[list[str], list[str]]:
     labels, functions = [], []
     for k in range(p + 1):
@@ -192,7 +185,6 @@ def _bernstein_basis_on_unit_interval(p: int) -> tuple[list[str], list[str]]:
             functions.append(f"x -> binomial({p}, {k}) * x^{k} * (1 - x)^({p} - {k})")
     return labels, functions
 
-
 def sbp_extra_exponential_basis(p: int, alpha: float, alpha_divisor: int = 1) -> tuple[list[str], list[str]]:
     alpha_text = repr(alpha)
     scaled_alpha_text = alpha_text if alpha_divisor == 1 else f"({alpha_text}/{alpha_divisor})"
@@ -202,7 +194,6 @@ def sbp_extra_exponential_basis(p: int, alpha: float, alpha_divisor: int = 1) ->
     labels.append(f"exp({scaled_alpha_text}x)")
     functions.append(f"let a = {julia_alpha}; x -> exp(a * x); end")
     return labels, functions
-
 
 def build_equispaced_exponential_operator(
     p: int, 
@@ -243,7 +234,6 @@ def build_equispaced_exponential_operator(
     save_cache(cache)
     return dataclasses.replace(operator, name=f"EXP_{cache_key}")
 
-
 def build_polynomial_operator(degree: int, op_type: str) -> Operator:  
     cache_key = f"poly_p{degree}_{op_type}"
     cache = load_cache()
@@ -275,7 +265,6 @@ def build_polynomial_operator(degree: int, op_type: str) -> Operator:
     save_cache(cache)
     return dataclasses.replace(operator, name=f"POLY_{cache_key}")
 
-
 DOMAIN = (0.0, 1.0)
 ELEMENT_COUNTS = [8, 16, 32, 64, 80, 100]
 COARSE_ELEMENTS = 100
@@ -290,29 +279,24 @@ STATIC_TYPE = "exponential"
 T = 1.0
 POLY_COEFFS = [0, 0, 0, 1]
 
-RUNS3CLOSED = [
-    {
-        "label": r"$\mathcal{P}_3$",
-        "poly_order": 3,
-        "op_type": "closed",
-        "num_right_elements": 0,
-        "x_right_elements": None,
-    },
+RUNS_LO_CLOSED = [
     {
         "label": r"$\mathcal{P}_4$",
         "poly_order": 4,
         "op_type": "closed",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:purple",
+        "marker": "o",
     },
     {
-        "label": r"Mixed $\mathcal{P}_4$ / $\mathcal{P}_3 + e^{\alpha x}$ ($x > 0.8$)",
-        "poly_order": 4,
+        "label": r"$\mathcal{P}_5$",
+        "poly_order": 5,
         "op_type": "closed",
-        "right_optimized": True,
-        "order": 3,
-        "num_right_elements": None,
-        "x_right_elements": 0.8,
+        "num_right_elements": 0,
+        "x_right_elements": None,
+        "color": "tab:blue",
+        "marker": "^",
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$, min-norm",
@@ -321,6 +305,8 @@ RUNS3CLOSED = [
         "op_type": "closed",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:green",
+        "marker": "s",
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$, simultaneous",
@@ -330,32 +316,29 @@ RUNS3CLOSED = [
         "op_type": "closed",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:red",
+        "marker": "d",
     },
 ]
 
-RUNS4CLOSED = [
-    {
-        "label": r"$\mathcal{P}_4$",
-        "poly_order": 4,
-        "op_type": "closed",
-        "num_right_elements": 0,
-        "x_right_elements": None,
-    },
+RUNS_HI_CLOSED = [
     {
         "label": r"$\mathcal{P}_5$",
         "poly_order": 5,
         "op_type": "closed",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:purple",
+        "marker": "o",
     },
     {
-        "label": r"Mixed $\mathcal{P}_5$ / $\mathcal{P}_4 + e^{\alpha x}$ ($x > 0.8$)",
-        "poly_order": 5,
+        "label": r"$\mathcal{P}_6$",
+        "poly_order": 6,
         "op_type": "closed",
-        "right_optimized": True,
-        "order": 4,
-        "num_right_elements": None,
-        "x_right_elements": 0.8,
+        "num_right_elements": 0,
+        "x_right_elements": None,
+        "color": "tab:blue",
+        "marker": "^",
     },
     {
         "label": r"$\mathcal{P}_4 + e^{\alpha x}$, min-norm",
@@ -364,6 +347,8 @@ RUNS4CLOSED = [
         "op_type": "closed",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:green",
+        "marker": "s",
     },
     {
         "label": r"$\mathcal{P}_4 + e^{\alpha x}$, simultaneous",
@@ -373,32 +358,29 @@ RUNS4CLOSED = [
         "op_type": "closed",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:red",
+        "marker": "d",
     },
 ]
 
-RUNS3OPEN = [
-    {
-        "label": r"$\mathcal{P}_3$",
-        "poly_order": 3,
-        "op_type": "open",
-        "num_right_elements": 0,
-        "x_right_elements": None,
-    },
+RUNS_LO_OPEN = [
     {
         "label": r"$\mathcal{P}_4$",
         "poly_order": 4,
         "op_type": "open",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:purple",
+        "marker": "o",
     },
     {
-        "label": r"Mixed $\mathcal{P}_4$ / $\mathcal{P}_3 + e^{\alpha x}$ ($x > 0.8$)",
-        "poly_order": 4,
+        "label": r"$\mathcal{P}_5$",
+        "poly_order": 5,
         "op_type": "open",
-        "right_optimized": True,
-        "order": 3,
-        "num_right_elements": None,
-        "x_right_elements": 0.8,
+        "num_right_elements": 0,
+        "x_right_elements": None,
+        "color": "tab:blue",
+        "marker": "^",
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$, min-norm",
@@ -407,6 +389,8 @@ RUNS3OPEN = [
         "op_type": "open",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:green",
+        "marker": "s",
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$, simultaneous",
@@ -416,16 +400,20 @@ RUNS3OPEN = [
         "op_type": "open",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:red",
+        "marker": "d",
     },
 ]
 
-RUNS4OPEN = [
+RUNS_HI_OPEN = [
     {
         "label": r"$\mathcal{P}_4$",
         "poly_order": 4,
         "op_type": "open",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:purple",
+        "marker": "o",
     },
     {
         "label": r"$\mathcal{P}_5$",
@@ -433,15 +421,8 @@ RUNS4OPEN = [
         "op_type": "open",
         "num_right_elements": 0,
         "x_right_elements": None,
-    },
-    {
-        "label": r"Mixed $\mathcal{P}_5$ / $\mathcal{P}_4 + e^{\alpha x}$ ($x > 0.8$)",
-        "poly_order": 5,
-        "op_type": "open",
-        "right_optimized": True,
-        "order": 4,
-        "num_right_elements": None,
-        "x_right_elements": 0.8,
+        "color": "tab:blue",
+        "marker": "^",
     },
     {
         "label": r"$\mathcal{P}_4 + e^{\alpha x}$, min-norm",
@@ -450,19 +431,22 @@ RUNS4OPEN = [
         "op_type": "open",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:green",
+        "marker": "s",
     },
     {
         "label": r"$\mathcal{P}_4 + e^{\alpha x}$, simultaneous",
-        "optimized": True,
+        "optimized": True,  
         "order": 4,
         "opt_method": "simultaneous",
         "op_type": "open",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:red",
+        "marker": "d",
     },
 ]
 
-# Comparison Runs 
 COMPARISON_RUNS = [
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$ (closed, simultaneous, upwind)",
@@ -473,6 +457,8 @@ COMPARISON_RUNS = [
         "sat_type": "upwind",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:red",
+        "marker": "d",
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$ (closed, sequential, upwind)",
@@ -483,6 +469,8 @@ COMPARISON_RUNS = [
         "sat_type": "upwind",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:orange",
+        "marker": "x",
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$ (closed, simultaneous, symmetric)",
@@ -493,6 +481,8 @@ COMPARISON_RUNS = [
         "sat_type": "symmetric",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:red",
+        "marker": "s",
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$ (closed, sequential, symmetric)",
@@ -503,10 +493,12 @@ COMPARISON_RUNS = [
         "sat_type": "symmetric",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:orange",
+        "marker": "o",
     },
 ]
 
-RUNS = RUNS4OPEN
+RUNS = RUNS_LO_CLOSED
 
 def static_component(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
@@ -515,7 +507,6 @@ def static_component(x: np.ndarray | float) -> np.ndarray:
     den = 1.0 - np.exp(-1.0 / epsilon)
     return num / den - x_arr + 1.0
 
-
 def singularity_f(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     epsilon = 0.0125
@@ -523,19 +514,16 @@ def singularity_f(x: np.ndarray | float) -> np.ndarray:
     den = 1.0 - np.exp(-1.0 / epsilon)
     return num / den - 1.0
 
-
+#roughness 0.5(-x^2 + x)\sin(5\pi x)
 def roughness_exact(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     return 0.5 * (-x_arr**2 + x_arr) * np.sin(5.0 * np.pi * x_arr)
 
-
 def singularity_exact(x: np.ndarray | float) -> np.ndarray:
     return static_component(x)
 
-
 def u_exact(x: np.ndarray | float) -> np.ndarray:
     return roughness_exact(x) + singularity_exact(x)
-
 
 def roughness_f(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
@@ -543,18 +531,14 @@ def roughness_f(x: np.ndarray | float) -> np.ndarray:
     term2 = 2.5 * np.pi * (-x_arr**2 + x_arr) * np.cos(5.0 * np.pi * x_arr)
     return term1 + term2
 
-
 def mixed_f(x: np.ndarray | float) -> np.ndarray:
     return roughness_f(x) + singularity_f(x)
-
 
 def a_fun(x: np.ndarray) -> np.ndarray:
     return np.ones_like(x, dtype=float)
 
-
 def b_fun(x: np.ndarray) -> np.ndarray:
     return np.ones_like(x, dtype=float)
-
 
 def count_right_elements(run: dict[str, object], num_elements: int) -> int:
     num_right_elements = run.get("num_right_elements")
@@ -568,25 +552,24 @@ def count_right_elements(run: dict[str, object], num_elements: int) -> int:
     target_x = float(repr(x_right_elements))
     return int(np.count_nonzero(np.round(bounds[1:], 12) > target_x))
 
-
 def operators_for_mesh(run: dict[str, object], num_elements: int) -> list[Operator]:
     num_right = count_right_elements(run, num_elements)
     num_interior = num_elements - num_right
     
     domain_len = DOMAIN[1] - DOMAIN[0]
-    global_alpha = domain_len / 0.08 #0.0125  
+    global_alpha = domain_len / 0.0125  
 
     int_op_type = run["op_type"]
 
     if run.get("min_norm"):
         int_op = build_exponential_operator(
             run.get("order", 3), global_alpha, op_type=int_op_type, 
-            alpha_divisor=num_elements, optimize=False
+            alpha_divisor=num_elements, optimize=False, opt_method="simultaneous"
         )
     elif run.get("optimized"):
         int_op = build_exponential_operator(
             run.get("order", 3), global_alpha, op_type=int_op_type, 
-            alpha_divisor=num_elements, optimize=True, opt_method=run.get("opt_method", "sequential")
+            alpha_divisor=num_elements, optimize=True, opt_method=run.get("opt_method", "simultaneous")
         )
     elif run.get("sbp_extra_equispaced"):
         int_op = build_equispaced_exponential_operator(
@@ -598,18 +581,17 @@ def operators_for_mesh(run: dict[str, object], num_elements: int) -> list[Operat
     else:
         int_op = operator_from_spec(run["interior_operator"])
 
-
     if num_right > 0:
         right_op_type = run.get("right_op_type", int_op_type)
         if run.get("right_min_norm"):
             right_op = build_exponential_operator(
                 run.get("order", 3), global_alpha, op_type=right_op_type,
-                alpha_divisor=num_elements, optimize=False
+                alpha_divisor=num_elements, optimize=False, opt_method="simultaneous"
             )
         elif run.get("right_optimized"):
             right_op = build_exponential_operator(
                 run.get("order", 3), global_alpha, op_type=right_op_type,
-                alpha_divisor=num_elements, optimize=True, opt_method=run.get("right_opt_method", "sequential")
+                alpha_divisor=num_elements, optimize=True, opt_method=run.get("right_opt_method", "simultaneous")
             )
         else:
             right_op = int_op
@@ -617,7 +599,6 @@ def operators_for_mesh(run: dict[str, object], num_elements: int) -> list[Operat
         right_op = int_op
 
     return [int_op] * num_interior + [right_op] * num_right
-
 
 def solve_on_mesh(
     run: dict[str, object],
@@ -640,7 +621,6 @@ def solve_on_mesh(
     
     u, _ = solve_steady(system.matrix, system.rhs, on_singular="nan")
     return system.elements, u
-
 
 def run_convergence(
     run: dict[str, object],
@@ -679,26 +659,10 @@ if __name__ == "__main__":
         {"label": "Mixed source", "exact_fun": u_exact, "f_fun": mixed_f, "title": r"Mixed source problem ($e^{\alpha x}$)"},
     ]
 
-    STYLE_MAP = {
-        r"$\mathcal{P}_3$": {"color": "purple", "marker": "o"},
-        r"$\mathcal{P}_4$": {"color": "blue", "marker": "^"},
-        r"$\mathcal{P}_3 + e^{\alpha x}$, min-norm": {"color": "green", "marker": "s"},
-        r"$\mathcal{P}_4 + e^{\alpha x}$, min-norm": {"color": "green", "marker": "s"},
-        r"$\mathcal{P}_3 + e^{\alpha x}$, simultaneous": {"color": "red", "marker": "D"},
-        r"$\mathcal{P}_4 + e^{\alpha x}$, simultaneous": {"color": "red", "marker": "D"}
-    }
-
-    active_labels = [r["label"] for r in RUNS]
-    run_colors = [STYLE_MAP.get(lbl, {"color": "orange"})["color"] for lbl in active_labels]
-    run_markers = [STYLE_MAP.get(lbl, {"marker": "*"})["marker"] for lbl in active_labels]
-    
-    if run_colors:
-        custom_plot_style = cycler(color=run_colors, marker=run_markers)
-    else:
-        custom_plot_style = None
-
     for experiment in EXPERIMENTS:
-        dof_rows, err_rows, profiles = [], [], []
+        dof_rows, err_rows, profiles, labels = [], [], [], []
+        run_colors, run_markers = [], []
+        
         print(f"\n==========================================")
         print(f"Experiment: {experiment['label']}")
         print(f"==========================================")
@@ -706,79 +670,61 @@ if __name__ == "__main__":
         for run in RUNS:
             try:
                 dofs, errors = run_convergence(run, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
+                coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
+                
                 dof_rows.append(dofs)
                 err_rows.append(errors)
-
-                coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
                 profiles.append(profile_from_elements(coarse_elements, coarse_u))
-            except ValueError as e:
+                labels.append(str(run["label"]))
+                run_colors.append(run.get("color", "black"))
+                run_markers.append(run.get("marker", "o"))
+            except Exception as e:
                 print(f"  [Skipped] {e}")
                 continue
 
-        labels = [str(run["label"]) for run in RUNS]
-        
-        if custom_plot_style and dof_rows:
-            with plt.rc_context({'axes.prop_cycle': custom_plot_style}):
-                plot_convergence(
-                    np.vstack(dof_rows), np.vstack(err_rows), labels,
-                    title=experiment["title"],
-                    grid=True, skipfit_st=[(len(ELEMENT_COUNTS)-3)] * len(dof_rows),
-                )
-        elif dof_rows:
+        if dof_rows:
             plot_convergence(
                 np.vstack(dof_rows), np.vstack(err_rows), labels,
                 title=experiment["title"],
                 grid=True, skipfit_st=[(len(ELEMENT_COUNTS)-3)] * len(dof_rows),
+                colors=run_colors,
+                markers=run_markers
             )
-            
-        for ax in plt.gcf().axes:
-            for line in ax.get_lines():
-                ls = str(line.get_linestyle()).strip()
-                if ls in ['--', ':', '-.', 'dashed', 'dotted', 'dashdot']:
-                    line.set_marker('None')
 
-        x_exact, u_exact_vals = exact_profile_on_domain(experiment["exact_fun"], domain=DOMAIN)
-        if PLOT_SOLS and dof_rows: 
-            if custom_plot_style:
-                with plt.rc_context({'axes.prop_cycle': custom_plot_style}):
-                    plot_solution_profiles(
-                        profiles, labels, x_exact=x_exact, u_exact=u_exact_vals,
-                        title=rf"{experiment['label']} solutions ({COARSE_ELEMENTS} elements)", grid=True,
-                    )
-            else:
+            x_exact, u_exact_vals = exact_profile_on_domain(experiment["exact_fun"], domain=DOMAIN)
+            if PLOT_SOLS: 
                 plot_solution_profiles(
                     profiles, labels, x_exact=x_exact, u_exact=u_exact_vals,
                     title=rf"{experiment['label']} solutions ({COARSE_ELEMENTS} elements)", grid=True,
+                    colors=run_colors,
+                    markers=run_markers
                 )
-                
-            for ax in plt.gcf().axes:
-                for line in ax.get_lines():
-                    ls = str(line.get_linestyle()).strip()
-                    if ls in ['--', ':', '-.', 'dashed', 'dotted', 'dashdot']:
-                        line.set_marker('None')
 
-   
     print("\n" + "="*60)
     print("Experiment: SAT Type & Optimization Comparison (Mixed Source)")
     print("="*60)
     
-    comp_dof_rows, comp_err_rows = [], []
+    comp_dof_rows, comp_err_rows, comp_labels = [], [], []
+    comp_colors, comp_markers = [], []
     for run in COMPARISON_RUNS:
         try:
             dofs, errors = run_convergence(run, exact_fun=u_exact, f_fun=mixed_f)
             comp_dof_rows.append(dofs)
             comp_err_rows.append(errors)
-        except ValueError as e:
+            comp_labels.append(str(run["label"]))
+            comp_colors.append(run.get("color", "black"))
+            comp_markers.append(run.get("marker", "o"))
+        except Exception as e:
             print(f"  [Skipped] {e}")
             continue
         
-    comp_labels = [str(run["label"]) for run in COMPARISON_RUNS]
-    
     if comp_dof_rows:
         plot_convergence(
             np.vstack(comp_dof_rows), np.vstack(comp_err_rows), comp_labels,
-            title=r"Optimization and Flux Comparison (Mixed source: $e^{\alpha x}$)",
+            title=r"Optimization and SAT Type Comparison (Mixed source: $e^{\alpha x}$)",
             grid=True, skipfit_st=[1] * len(comp_dof_rows),
+            colors=comp_colors,
+            markers=comp_markers
         )
 
     if SHOW_PLOTS:

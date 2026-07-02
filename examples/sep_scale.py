@@ -209,14 +209,14 @@ SAT_TYPE = "upwind"
 SHOW_PLOTS = True
 PLOT_SOLS = True
 
-LBL_P4 = r"$\mathcal{P}_4$ LGL"
 LBL_P5 = r"$\mathcal{P}_5$ LGL"
+LBL_P6 = r"$\mathcal{P}_6$ LGL"
 LBL_P3E = r"$\mathcal{P}_3 + e^{\alpha x}$ (optimized)"
 LBL_P4E = r"$\mathcal{P}_4 + e^{\alpha x}$ (optimized)"
 
 RUNS = [
-    {"label": LBL_P4, "poly_order": 4, "op_type": "closed"},
     {"label": LBL_P5, "poly_order": 5, "op_type": "closed"},
+    {"label": LBL_P6, "poly_order": 6, "op_type": "closed"},
     {"label": LBL_P3E, "exp_order": 3, "op_type": "closed", "optimized": True},
     {"label": LBL_P4E, "exp_order": 4, "op_type": "closed", "optimized": True},
 ]
@@ -374,24 +374,24 @@ if __name__ == "__main__":
 
 
     print("\n" + "="*120)
-    print(f"{'Pe (Alpha)':<10s} | {'Rate Ratio (P3+E/P4)':<22s} | {'Err Ratio (P3+E/P4)':<22s} | {'Rate Ratio (P4+E/P5)':<22s} | {'Err Ratio (P4+E/P5)':<22s}")
+    print(f"{'Pe (Alpha)':<10s} | {'Rate Ratio (P3+E/P5)':<22s} | {'Err Ratio (P3+E/P5)':<22s} | {'Rate Ratio (P4+E/P6)':<22s} | {'Err Ratio (P4+E/P6)':<22s}")
     print("-" * 120)
     
     for pe_val in STEEPNESS_CONFIGS:
         val = float(pe_val["pe"])
         res = results[val]
         
-        # P3 + Exp vs P4 calculations
-        r_P4, r_P3E = res[LBL_P4]["rate"], res[LBL_P3E]["rate"]
-        e_P4, e_P3E = res[LBL_P4]["e32"], res[LBL_P3E]["e32"]
-        rate_ratio_3 = (r_P3E / r_P4) if not np.isnan(r_P4) else np.nan
-        err_ratio_3 = (e_P3E / e_P4) if e_P4 else np.nan
+        # P3 + Exp vs P5 calculations
+        r_P5, r_P3E = res[LBL_P5]["rate"], res[LBL_P3E]["rate"]
+        e_P5, e_P3E = res[LBL_P5]["e32"], res[LBL_P3E]["e32"]
+        rate_ratio_3 = (r_P3E / r_P5) if not np.isnan(r_P5) else np.nan
+        err_ratio_3 = (e_P3E / e_P5) if e_P5 else np.nan
         
-        # P4 + Exp vs P5 calculations
-        r_P5, r_P4E = res[LBL_P5]["rate"], res[LBL_P4E]["rate"]
-        e_P5, e_P4E = res[LBL_P5]["e32"], res[LBL_P4E]["e32"]
-        rate_ratio_4 = (r_P4E / r_P5) if not np.isnan(r_P5) else np.nan
-        err_ratio_4 = (e_P4E / e_P5) if e_P5 else np.nan
+        # P4 + Exp vs P6 calculations
+        r_P6, r_P4E = res[LBL_P6]["rate"], res[LBL_P4E]["rate"]
+        e_P6, e_P4E = res[LBL_P6]["e32"], res[LBL_P4E]["e32"]
+        rate_ratio_4 = (r_P4E / r_P6) if not np.isnan(r_P6) else np.nan
+        err_ratio_4 = (e_P4E / e_P6) if e_P6 else np.nan
 
         rate_3_str = f"{rate_ratio_3:.4f}" if not np.isnan(rate_ratio_3) else "NaN"
         err_3_str = f"{err_ratio_3:.4e}" if not np.isnan(err_ratio_3) else "NaN"
@@ -407,16 +407,16 @@ if __name__ == "__main__":
         plt.figure(figsize=(10, 7))
         
         # Explicit mapping for colors (Pe) and markers (Operator type)
-        colors = {80.0: 'red', 40.0: 'blue', 20.0: 'green', 10.0: 'purple'}
+        colors = {80.0: 'tab:red', 40.0: 'tab:blue', 20.0: 'tab:green', 10.0: 'tab:purple'}
         markers = {
-            LBL_P4: 'x',
+            LBL_P5: 'x',
             LBL_P3E: 'o',
-            LBL_P5: '^',
+            LBL_P6: '^',
             LBL_P4E: 's'
         }
 
         for pe_val in [80.0, 40.0, 20.0, 10.0]:
-            for run_label in [LBL_P4, LBL_P3E, LBL_P5, LBL_P4E]:
+            for run_label in [LBL_P5, LBL_P3E, LBL_P6, LBL_P4E]:
                 data = results[pe_val][run_label]
                 
                 plt.loglog(

@@ -36,7 +36,7 @@ from src.plotting import (
 )
 from src.solve import solve_steady
 
-CACHE_FILE = Path(__file__).parent / "operator_cache_sqrt_v11.json"
+CACHE_FILE = Path(__file__).parent / "operator_cache_sqrt_v13.json"
 
 def load_cache() -> dict:
     if CACHE_FILE.exists() and CACHE_FILE.stat().st_size > 0:
@@ -92,6 +92,14 @@ def sqrt_bases(p: int, k: int, op_type: str, optimize: bool = True) -> tuple[Jul
     
     num_poly = 2 * p     
     num_sing = p + 1     
+
+    base_constraints = num_poly + num_sing
+    
+    if op_type in {"open", "closed"} and base_constraints % 2 != 0:
+        num_poly += 1
+    elif op_type == "half-open-right" and base_constraints % 2 == 0:
+        num_poly += 1
+
     num_quad_required = num_poly + num_sing
     
     num_op = p + 2
@@ -112,7 +120,7 @@ def sqrt_bases(p: int, k: int, op_type: str, optimize: bool = True) -> tuple[Jul
         
     if num_quad_required > total_dofs:
         raise ValueError(
-            f"Algebraic Deadlock: A p={p} {op_type} operator with opt={optimize} only has {total_dofs} DOFs, "
+            f"ERR A p={p} {op_type} operator with opt={optimize} only has {total_dofs} DOFs, "
             f"but SBP exactness requires {num_quad_required} constraints."
         )
 
@@ -176,7 +184,7 @@ def build_sqrt_operator(
     if optimize is None:
         optimize = True
 
-    cache_key = f"sqrt_p{p}_k{k}_{op_type}_opt{optimize}_{opt_method}_v11"
+    cache_key = f"sqrt_p{p}_k{k}_{op_type}_opt{optimize}_{opt_method}_v13"
     cache = load_cache()
 
     if cache_key in cache:
@@ -193,16 +201,22 @@ def build_sqrt_operator(
 
     opt_kwargs = {}
     if optimize:
+        opt_funcs = f"[x -> x^{p + 1}, x -> x^{p + 2}]"
+        opt_derivs = f"[x -> {p + 1} * x^{p}, x -> {p + 2} * x^{p + 1}]"
+        
         opt_kwargs["use_optimization"] = True
         opt_kwargs["opt_method"] = opt_method
-        opt_kwargs["extrapolation_objective_weights"] = [1.0, 0.1]
-        opt_kwargs["S_objective_weights"] = [1.0, 0.1]
+        opt_kwargs["extrapolation_objective_weights"] = [0.9, 0.1]
+        opt_kwargs["S_objective_weights"] = [0.9, 0.1]
+        opt_kwargs["test_functions"] = opt_funcs
+        opt_kwargs["test_derivatives"] = opt_derivs
+        opt_kwargs["test_weights"] = [2, 1]
     else:
         opt_kwargs["use_optimization"] = False
 
     operator = build_operator_from_julia(
         op_basis, quad_basis, interval=(0.0, 1.0), precision="bigfloat",
-        digits=42, orthogonalize=True, principal=principal,
+        digits=56, orthogonalize=True, principal=principal,
         **opt_kwargs
     )
 
@@ -223,46 +237,97 @@ SHOW_PLOTS = True
 PLOT_SOLS = True
 ROOT_POWER = 0.5
 
-RUNS3OPEN = [
+RUNS_LO_OPEN = [
     {
         "label": r"$\mathcal{P}_4$ (open)",
         "poly_order": 4,
         "op_type": "open",
+        "color": "tab:purple",
+        "marker": "o",
     },
     {
         "label": r"$\mathcal{P}_5$ (open)",
         "poly_order": 5,
         "op_type": "open",
+        "color": "tab:blue",
+        "marker": "^",
     },
     {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$ ($x > 0.8$, open)",
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$ ($x > 0.9$, open)",
         "poly_order": 4,
         "op_type": "open",
         "right_sqrt": True,
         "sqrt_order": 3,
         "shifted": False,
         "right_op_type": "open",
-        "x_right_elements": 0.8,
+        "x_right_elements": 0.9,
+        "color": "tab:orange",
+        "marker": "+",
     },
     {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.8$, open)",
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.9$, open)",
         "poly_order": 4,
         "op_type": "open",
         "right_sqrt": True,
         "sqrt_order": 3,
         "shifted": True,
         "right_op_type": "open",
-        "x_right_elements": 0.8,
+        "x_right_elements": 0.9,
+        "color": "tab:red",
+        "marker": "d",
     }
 ]
 
-RUNS3CLOSED = [
+RUNS_HI_OPEN = [
+    {
+        "label": r"$\mathcal{P}_5$ (open)",
+        "poly_order": 5,
+        "op_type": "open",
+        "color": "tab:purple",
+        "marker": "o",
+    },
+    {
+        "label": r"$\mathcal{P}_6$ (open)",
+        "poly_order": 6,
+        "op_type": "open",
+        "color": "tab:blue",
+        "marker": "^",
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{1-x}$ ($x > 0.9$, open)",
+        "poly_order": 5,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 4,
+        "shifted": False,
+        "right_op_type": "open",
+        "x_right_elements": 0.9,
+        "color": "tab:orange",
+        "marker": "+",
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{k-x}$ ($x > 0.9$, open)",
+        "poly_order": 5,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 4,
+        "shifted": True,
+        "right_op_type": "open",
+        "x_right_elements": 0.9,
+        "color": "tab:red",
+        "marker": "d",
+    }
+]
+
+RUNS_LO_CLOSED = [
     {
         "label": r"$\mathcal{P}_4$ / $\mathcal{P}_4$ Radau (rightmost)",
         "poly_order": 4,
         "op_type": "closed",
         "right_poly_op_type": "half-open-right",
         "num_right_elements": 1,
+        "color": "tab:purple",
+        "marker": "o",
     },
     {
         "label": r"$\mathcal{P}_5$ / $\mathcal{P}_5$ Radau (rightmost)",
@@ -270,17 +335,8 @@ RUNS3CLOSED = [
         "op_type": "closed",
         "right_poly_op_type": "half-open-right",
         "num_right_elements": 1,
-    },
-    {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.8$, closed/Radau)",
-        "poly_order": 4,
-        "op_type": "closed",
-        "right_sqrt": True,
-        "sqrt_order": 3,
-        "shifted": True,
-        "right_op_type": "closed",
-        "rightmost_op_type": "half-open-right",
-        "x_right_elements": 0.8,
+        "color": "tab:blue",
+        "marker": "^",
     },
     {
         "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$ Radau (rightmost)",
@@ -291,49 +347,33 @@ RUNS3CLOSED = [
         "shifted": False,
         "right_op_type": "half-open-right",
         "num_right_elements": 1,
-    }
-]
-
-RUNS4OPEN = [
-    {
-        "label": r"$\mathcal{P}_5$ (open)",
-        "poly_order": 5,
-        "op_type": "open",
+        "color": "tab:orange",
+        "marker": "+",
     },
     {
-        "label": r"$\mathcal{P}_6$ (open)",
-        "poly_order": 6,
-        "op_type": "open",
-    },
-    {
-        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{1-x}$ ($x > 0.8$, open)",
-        "poly_order": 5,
-        "op_type": "open",
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.9$, closed/Radau)",
+        "poly_order": 4,
+        "op_type": "closed",
         "right_sqrt": True,
-        "sqrt_order": 4,
-        "shifted": False,
-        "right_op_type": "open",
-        "x_right_elements": 0.8,
-    },
-    {
-        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{k-x}$ ($x > 0.8$, open)",
-        "poly_order": 5,
-        "op_type": "open",
-        "right_sqrt": True,
-        "sqrt_order": 4,
+        "sqrt_order": 3,
         "shifted": True,
-        "right_op_type": "open",
-        "x_right_elements": 0.8,
+        "right_op_type": "closed",
+        "rightmost_op_type": "half-open-right",
+        "x_right_elements": 0.9,
+        "color": "tab:red",
+        "marker": "d",
     }
 ]
 
-RUNS4CLOSED = [
+RUNS_HI_CLOSED = [
     {
         "label": r"$\mathcal{P}_5$ / $\mathcal{P}_5$ Radau (rightmost)",
         "poly_order": 5,
         "op_type": "closed",
         "right_poly_op_type": "half-open-right",
         "num_right_elements": 1,
+        "color": "tab:purple",
+        "marker": "o",
     },
     {
         "label": r"$\mathcal{P}_6$ / $\mathcal{P}_6$ Radau (rightmost)",
@@ -341,17 +381,8 @@ RUNS4CLOSED = [
         "op_type": "closed",
         "right_poly_op_type": "half-open-right",
         "num_right_elements": 1,
-    },
-    {
-        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{k-x}$ ($x > 0.8$, closed/Radau)",
-        "poly_order": 5,
-        "op_type": "closed",
-        "right_sqrt": True,
-        "sqrt_order": 4,
-        "shifted": True,
-        "right_op_type": "closed",
-        "rightmost_op_type": "half-open-right",
-        "x_right_elements": 0.8,
+        "color": "tab:blue",
+        "marker": "^",
     },
     {
         "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{1-x}$ Radau (rightmost)",
@@ -362,10 +393,25 @@ RUNS4CLOSED = [
         "shifted": False,
         "right_op_type": "half-open-right",
         "num_right_elements": 1,
+        "color": "tab:orange",
+        "marker": "+",
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{k-x}$ ($x > 0.9$, closed/Radau)",
+        "poly_order": 5,
+        "op_type": "closed",
+        "right_sqrt": True,
+        "sqrt_order": 4,
+        "shifted": True,
+        "right_op_type": "closed",
+        "rightmost_op_type": "half-open-right",
+        "x_right_elements": 0.9,
+        "color": "tab:red",
+        "marker": "d",
     }
 ]
 
-RUNS = RUNS4CLOSED
+RUNS = RUNS_LO_OPEN
 
 def static_component(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
@@ -377,6 +423,7 @@ def singularity_f(x: np.ndarray | float) -> np.ndarray:
     base = np.clip(1.0 - x_arr, 1e-16, None)
     return -3.0 * ROOT_POWER * np.power(base, ROOT_POWER - 1.0)
 
+#roughness 0.5(-x^2 + x)\sin(5\pi x)
 def roughness_exact(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     return 0.5 * (-x_arr**2 + x_arr) * np.sin(5.0 * np.pi * x_arr)
@@ -519,6 +566,8 @@ if __name__ == "__main__":
 
     for experiment in EXPERIMENTS:
         dof_rows, err_rows, profiles, labels = [], [], [], []
+        run_colors, run_markers = [], []
+        
         print(f"\n==========================================")
         print(f"Experiment: {experiment['label']}")
         print(f"==========================================")
@@ -532,8 +581,10 @@ if __name__ == "__main__":
                 err_rows.append(errors)
                 profiles.append(profile_from_elements(coarse_elements, coarse_u))
                 labels.append(str(run["label"]))
+                run_colors.append(run.get("color", "black"))
+                run_markers.append(run.get("marker", "o"))
                 
-            except ValueError as e:
+            except Exception as e:
                 print(f"  [Skipped] {e}")
                 continue
 
@@ -542,6 +593,8 @@ if __name__ == "__main__":
                 np.vstack(dof_rows), np.vstack(err_rows), labels,
                 title=experiment["title"],
                 grid=True, skipfit_st=[len(ELEMENT_COUNTS)-3] * len(dof_rows),
+                colors=run_colors,
+                markers=run_markers
             )
 
             x_exact, u_exact_vals = exact_profile_on_domain(experiment["exact_fun"], domain=DOMAIN)
@@ -549,6 +602,8 @@ if __name__ == "__main__":
                 plot_solution_profiles(
                     profiles, labels, x_exact=x_exact, u_exact=u_exact_vals,
                     title=rf"{experiment['label']} solutions ({COARSE_ELEMENTS} elements)", grid=True,
+                    colors=run_colors,
+                    markers=run_markers
                 )
 
     if SHOW_PLOTS:
