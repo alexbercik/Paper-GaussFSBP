@@ -8,7 +8,6 @@ import warnings
 import matplotlib.pyplot as plt
 plt.close("all")
 import numpy as np
-import scipy.linalg
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -16,10 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src import (
     JuliaBasis,
-    JuliaOperatorError,
     build_operator_from_julia,
-    build_operator_from_sbp_extra,
-    check_nullspace_consistency,
     check_sbp_property,
     legendre_basis_factory,
 )
@@ -171,67 +167,6 @@ def build_exponential_operator(
     save_cache(cache)
     return dataclasses.replace(operator, name=f"EXP_{cache_key}")
 
-def _bernstein_basis_on_unit_interval(p: int) -> tuple[list[str], list[str]]:
-    labels, functions = [], []
-    for k in range(p + 1):
-        labels.append(f"B_{k}^{p}")
-        if k == 0:
-            functions.append("x -> one(x)" if p == 0 else f"x -> (1 - x)^{p}")
-        elif k == p:
-            functions.append(f"x -> x^{p}")
-        else:
-            functions.append(f"x -> binomial({p}, {k}) * x^{k} * (1 - x)^({p} - {k})")
-    return labels, functions
-
-def sbp_extra_exponential_basis(p: int, alpha: float, alpha_divisor: int = 1) -> tuple[list[str], list[str]]:
-    alpha_text = repr(alpha)
-    scaled_alpha_text = alpha_text if alpha_divisor == 1 else f"({alpha_text}/{alpha_divisor})"
-    julia_alpha = f"({alpha_text} / {alpha_divisor})"
-
-    labels, functions = _bernstein_basis_on_unit_interval(p)
-    labels.append(f"exp({scaled_alpha_text}x)")
-    functions.append(f"let a = {julia_alpha}; x -> exp(a * x); end")
-    return labels, functions
-
-def build_equispaced_exponential_operator(
-    p: int, 
-    alpha: float, 
-    op_type: str,  
-    *, 
-    alpha_divisor: int = 1
-) -> Operator:
-    cache_key = f"p{p}_alpha{repr(alpha)}_div{alpha_divisor}_equispaced_{op_type}"
-    cache = load_cache()
-
-    if cache_key in cache:
-        data = cache[cache_key]
-        return Operator(
-            name=f"EXP_{cache_key}", basis=data["basis"], quad_basis=data["quad_basis"],
-            op_type=data["op_type"], selector=0, interval=np.array(data["interval"]),
-            nodes=np.array(data["nodes"]), D=np.array(data["D"]), H=np.array(data["H"]),
-            tL=np.array(data["tL"]), tR=np.array(data["tR"])
-        )
-
-    print(f"  -> Cache miss. Generating Equispaced EXP operator (p={p}, div={alpha_divisor}, type={op_type})...")
-    basis_labels, functions = sbp_extra_exponential_basis(p, alpha, alpha_divisor)
-    initial_num_nodes = p + 2
-
-    operator = build_operator_from_sbp_extra(
-        functions, initial_num_nodes, basis_labels=basis_labels, quad_basis_labels=basis_labels,
-        op_type=op_type, interval=(0.0, 1.0), source="orig",
-        max_num_nodes=initial_num_nodes + 20, max_iterations=200000,
-        g_tol=1.0e-25, sbp_tolerance=1.0e-12, accuracy_tolerance=1.0e-8
-    )
-
-    cache[cache_key] = {
-        "basis": basis_labels, "quad_basis": basis_labels, "op_type": operator.op_type,
-        "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
-        "D": operator.D.tolist(), "H": operator.H.tolist(),
-        "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
-    }
-    save_cache(cache)
-    return dataclasses.replace(operator, name=f"EXP_{cache_key}")
-
 def build_polynomial_operator(degree: int, op_type: str) -> Operator:  
     cache_key = f"poly_p{degree}_{op_type}"
     cache = load_cache()
@@ -269,13 +204,6 @@ COARSE_ELEMENTS = 100
 SAT_TYPE = "upwind"
 SHOW_PLOTS = True
 PLOT_SOLS = True
-
-K = 7.0
-OMEGA = 2.0
-C = -0.5
-STATIC_TYPE = "exponential"  
-T = 1.0
-POLY_COEFFS = [0, 0, 0, 1]
 
 RUNS_LO_CLOSED = [
     {
@@ -568,11 +496,6 @@ def operators_for_mesh(run: dict[str, object], num_elements: int) -> list[Operat
         int_op = build_exponential_operator(
             run.get("order", 3), global_alpha, op_type=int_op_type, 
             alpha_divisor=num_elements, optimize=True, opt_method=run.get("opt_method", "simultaneous")
-        )
-    elif run.get("sbp_extra_equispaced"):
-        int_op = build_equispaced_exponential_operator(
-            run.get("order", 3), global_alpha, op_type=int_op_type, 
-            alpha_divisor=num_elements
         )
     elif run.get("poly_order"):
         int_op = build_polynomial_operator(run["poly_order"], int_op_type)

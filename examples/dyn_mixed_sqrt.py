@@ -8,7 +8,6 @@ import warnings
 import matplotlib.pyplot as plt
 plt.close("all")
 import numpy as np
-import scipy.linalg
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -16,9 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src import (
     JuliaBasis,
-    JuliaOperatorError,
     build_operator_from_julia,
-    check_nullspace_consistency,
     check_sbp_property,
     legendre_basis_factory,
 )
