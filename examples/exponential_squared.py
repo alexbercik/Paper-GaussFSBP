@@ -39,19 +39,21 @@ DOMAIN = (0.0, 1.0)
 REF_DOMAIN = (0.0, 1.0)
 ELEMENT_COUNTS = [4, 8, 16, 32]
 COARSE_ELEMENTS = 4
-SAT_TYPE = "central"
+SAT_TYPE = "upwind"
 SHOW_PLOTS = True
 VERBOSE = False
 QUAD_VERBOSE = False
 
 # Select "closed" for an LGL-type rule or "open" for an LG-type rule.
-op_type = "closed"
+op_type = "open"
+savefile=None #'exp_squared_p3_open_sym.pdf'
 
 # The enriched basis contains P_0, ..., P_p and exp(BASIS_EXPONENT * x).  The
 # polynomial comparison operator has degree p + 1 and therefore has the same
 # number of approximation functions as the enriched basis.
 P = 3
-BASIS_EXPONENT = 11 # use 10.1 for p2, 10.9 for p3, 11.4 for p4
+BASIS_EXPONENT = 11 
+PLOT_EQUISPACED = False
 EQUISPACED_EXTRA_NODE_BUFFER = 20
 EQUISPACED_MESH_ELEMENT_FACTOR = 2
 
@@ -264,6 +266,8 @@ def build_exponential_operator(
         test_weights=opt_func_weights,
         extrapolation_objective_weights=opt_extrap_weights,
         S_objective_weights=opt_S_weights,
+        extrapolation_norm='Hinv',
+        sbp_check_action='warn',
     )
 
 
@@ -412,7 +416,7 @@ def build_runs() -> list[dict[str, object]]:
         )
         runs.append(
             {
-                "label": f"$p={polynomial_degree}$",
+                "label": rf"$\mathcal{{P}}_{{{polynomial_degree}}}$",
                 "operators": {
                     num_elements: polynomial_operator
                     for num_elements in mesh_counts
@@ -464,7 +468,7 @@ def build_runs() -> list[dict[str, object]]:
         runs.append(
             {
                 "label": (
-                    f"$p={P}$ + exp, {construction}"
+                    rf"$\mathcal{{P}}_{{{P}}} + e^{{\alpha x}}$, {construction}"
                 ),
                 "operators": operators,
                 **(
@@ -477,7 +481,7 @@ def build_runs() -> list[dict[str, object]]:
             }
         )
 
-    if op_type == "closed":
+    if op_type == "closed" and PLOT_EQUISPACED:
         equispaced_factor = EQUISPACED_MESH_ELEMENT_FACTOR
         if SCALE_BASIS_EXPONENT:
             equispaced_operators = {
@@ -502,7 +506,7 @@ def build_runs() -> list[dict[str, object]]:
 
         runs.append(
             {
-                "label": f"$p={P}$ + exp, equispaced",
+                "label": rf"$\mathcal{{P}}_{{{P}}} + e^{{\alpha x}}$, equispaced",
                 "operators": equispaced_operators,
                 "mesh_element_factor": equispaced_factor,
                 **EQUISPACED_STYLE,
@@ -700,10 +704,13 @@ plot_convergence(
     labels,
     title=None, #convergence_title,
     grid=True,
-    ylim=(1e-10, 9e-1),
-    xlim=(14, 250),
+    ylim=(1e-12, 10),
+    xlim=(14, 280),
     colors=plot_colors,
     markers=plot_markers,
+    legend_behind_data=True,
+    legendloc='lower left',
+    savefile=savefile,    
 )
 
 x_exact, exact_values = exact_profile_on_domain(u_exact, domain=DOMAIN)
