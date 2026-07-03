@@ -194,6 +194,7 @@ def plot_convergence(
     markers: Sequence[str] | None = None,
     linestyles: Sequence[str] | None = None,
     legendloc: str = "best",
+    legend_behind_data: bool = False,
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
 ) -> plt.Figure:
@@ -208,6 +209,8 @@ def plot_convergence(
         One label per case.
     xlim, ylim
         Optional ``(min, max)`` axis limits in data coordinates (not log10).
+    legend_behind_data
+        If True, draw the legend underneath the plotted curves and markers.
     """
     dof_arr = np.asarray(dof_vec, dtype=float)
     err_arr = np.asarray(err_vec, dtype=float)
@@ -235,15 +238,22 @@ def plot_convergence(
     colors = list(colors) if colors is not None else list(TAB_COLORS)
     markers = list(markers) if markers is not None else list(DEFAULT_MARKERS)
     linestyles = list(linestyles) if linestyles is not None else list(DEFAULT_LINESTYLES)
+    # Grid < legend < data. Matplotlib's default grid zorder is ~2, so a legend at
+    # zorder=1 ends up underneath the grid and looks transparent.
+    grid_zorder = 0.5
+    legend_zorder = 3.0 if legend_behind_data else None
+    data_zorder = 5.0 if legend_behind_data else 2.0
 
-    fig = plt.figure(figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize)
     if title is not None:
-        plt.title(title, fontsize=title_size)
-    plt.ylabel(
+        ax.set_title(title, fontsize=title_size)
+    ax.set_ylabel(
         ylabel or r"$\| \boldsymbol{u}_h - u(\boldsymbol{x}) \|_\mathsf{H}$",
         fontsize=title_size,
     )
-    plt.xlabel(xlabel or "DOF", fontsize=title_size)
+    ax.set_xlabel(xlabel or "DOF", fontsize=title_size)
+    if legend_behind_data:
+        ax.set_axisbelow(True)
 
     for i in range(n_cases):
         dof_mod, err_mod = _clean_series(dof_arr[i, skip[i] :], err_arr[i, skip[i] :])
@@ -262,7 +272,7 @@ def plot_convergence(
             slope, intercept = _fit_log_log(dof_fit, err_fit)
             if showslope:
                 slope_label = rf" ({slope:.2f})"
-            plt.loglog(
+            ax.loglog(
                 dof_mod,
                 err_mod,
                 marker,
@@ -271,17 +281,25 @@ def plot_convergence(
                 markerfacecolor="none",
                 markeredgewidth=2,
                 label=label + slope_label,
+                zorder=data_zorder,
             )
             dof_line = np.linspace(dof_fit[0], dof_fit[-1], 50)
             err_line = np.exp(-slope * np.log(dof_line) + intercept)
-            plt.loglog(dof_line, err_line, linewidth=1, linestyle=linestyle, color=color)
+            ax.loglog(
+                dof_line,
+                err_line,
+                linewidth=1,
+                linestyle=linestyle,
+                color=color,
+                zorder=data_zorder,
+            )
         elif len(dof_mod) == 2:
             slope = -(np.log(err_mod[1]) - np.log(err_mod[0])) / (
                 np.log(dof_mod[1]) - np.log(dof_mod[0])
             )
             if showslope:
                 slope_label = rf" ({slope:.2f})"
-            plt.loglog(
+            ax.loglog(
                 dof_mod,
                 err_mod,
                 marker,
@@ -290,14 +308,35 @@ def plot_convergence(
                 markerfacecolor="none",
                 markeredgewidth=2,
                 label=label + slope_label,
+                zorder=data_zorder,
             )
-            plt.loglog(dof_mod, err_mod, linewidth=1, linestyle=linestyle, color=color)
+            ax.loglog(
+                dof_mod,
+                err_mod,
+                linewidth=1,
+                linestyle=linestyle,
+                color=color,
+                zorder=data_zorder,
+            )
 
-    plt.legend(loc=legendloc, fontsize=legendsize)
+    legend = ax.legend(loc=legendloc, fontsize=legendsize)
+    if legend_zorder is not None:
+        legend.set_zorder(legend_zorder)
+        frame = legend.get_frame()
+        frame.set_alpha(1.0)
+        frame.set_facecolor("white")
     if grid:
-        plt.grid(which="major", axis="y", linestyle="--", color="gray", linewidth=1)
+        grid_kwargs = {
+            "which": "major",
+            "axis": "y",
+            "linestyle": "--",
+            "color": "gray",
+            "linewidth": 1,
+        }
+        if legend_behind_data:
+            grid_kwargs["zorder"] = grid_zorder
+        ax.grid(**grid_kwargs)
 
-    ax = plt.gca()
     ax.yaxis.set_major_locator(tik.LogLocator(base=10.0, subs=[1.0], numticks=10))
     ax.yaxis.set_minor_locator(tik.LogLocator(base=10.0, subs="auto", numticks=10))
     if xlim is not None:
@@ -305,7 +344,7 @@ def plot_convergence(
     if ylim is not None:
         ax.set_ylim(ylim)
     ax.tick_params(axis="both", which="both", labelsize=tick_size)
-    plt.tight_layout()
+    fig.tight_layout()
 
     if savefile is not None:
         fig.savefig(savefile, dpi=600, bbox_inches="tight")
