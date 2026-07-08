@@ -31,7 +31,215 @@ from src.plotting import (
 )
 from src.solve import solve_steady
 
-CACHE_FILE = Path(__file__).parent / "operator_cache_sqrt_v13.json"
+
+DOMAIN = (0.0, 1.0)
+ELEMENT_COUNTS = [8, 16, 22, 32, 64, 128, 200]
+COARSE_ELEMENTS = 4
+SAT_TYPE = "upwind"
+SHOW_PLOTS = True
+PLOT_SOLS = True
+INTERPOLATE_SOLUTION_PROFILES = True
+PROFILE_POINTS_PER_ELEMENT = 50
+ROOT_POWER = 0.5
+
+# Add "plot_solution_profile": False to any run that should appear in
+# convergence plots but be hidden from solution profile plots.
+RUNS_LO_OPEN = [
+    {
+        "label": r"$\mathcal{P}_4$",
+        "poly_order": 4,
+        "op_type": "open",
+        "color": "tab:purple",
+        "marker": "o",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_5$",
+        "poly_order": 5,
+        "op_type": "open",
+        "color": "tab:blue",
+        "marker": "^",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{\ell-x}$",
+        "poly_order": 4,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 3,
+        "shifted": True,
+        "right_op_type": "open",
+        "x_right_elements": 0.9,
+        "color": "tab:red",
+        "marker": "d",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$",
+        "poly_order": 4,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 3,
+        "shifted": False,
+        "right_op_type": "open",
+        "x_right_elements": 0.9,
+        "color": "tab:green",
+        "marker": "+",
+        "skipfit_st": 2,
+    },
+]
+
+RUNS_HI_OPEN = [
+    {
+        "label": r"$\mathcal{P}_5$",
+        "poly_order": 5,
+        "op_type": "open",
+        "color": "tab:purple",
+        "marker": "o",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_6$",
+        "poly_order": 6,
+        "op_type": "open",
+        "color": "tab:blue",
+        "marker": "^",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{\ell-x}$",
+        "poly_order": 5,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 4,
+        "shifted": True,
+        "right_op_type": "open",
+        "x_right_elements": 0.9,
+        "color": "tab:red",
+        "marker": "d",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{1-x}$",
+        "poly_order": 5,
+        "op_type": "open",
+        "right_sqrt": True,
+        "sqrt_order": 4,
+        "shifted": False,
+        "right_op_type": "open",
+        "x_right_elements": 0.9,
+        "color": "tab:green",
+        "marker": "+",
+        "skipfit_st": 2,
+    },
+]
+
+RUNS_LO_CLOSED = [
+    {
+        "label": r"$\mathcal{P}_4$",
+        "poly_order": 4,
+        "op_type": "closed",
+        "right_poly_op_type": "half-open-right",
+        "num_right_elements": 1,
+        "color": "tab:purple",
+        "marker": "o",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_5$",
+        "poly_order": 5,
+        "op_type": "closed",
+        "right_poly_op_type": "half-open-right",
+        "num_right_elements": 1,
+        "color": "tab:blue",
+        "marker": "^",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{\ell-x}$",
+        "poly_order": 4,
+        "op_type": "closed",
+        "right_sqrt": True,
+        "sqrt_order": 3,
+        "shifted": True,
+        "right_op_type": "closed",
+        "rightmost_op_type": "half-open-right",
+        "x_right_elements": 0.9,
+        "color": "tab:red",
+        "marker": "d",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$",
+        "poly_order": 4,
+        "op_type": "closed",
+        "right_sqrt": True,
+        "sqrt_order": 3,
+        "shifted": False,
+        "right_op_type": "half-open-right",
+        "num_right_elements": 1,
+        "color": "tab:green",
+        "marker": "+",
+        "skipfit_st": 2,
+    },
+]
+
+RUNS_HI_CLOSED = [
+    {
+        "label": r"$\mathcal{P}_5$",
+        "poly_order": 5,
+        "op_type": "closed",
+        "right_poly_op_type": "half-open-right",
+        "num_right_elements": 1,
+        "color": "tab:purple",
+        "marker": "o",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_6$",
+        "poly_order": 6,
+        "op_type": "closed",
+        "right_poly_op_type": "half-open-right",
+        "num_right_elements": 1,
+        "color": "tab:blue",
+        "marker": "^",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{\ell-x}$",
+        "poly_order": 5,
+        "op_type": "closed",
+        "right_sqrt": True,
+        "sqrt_order": 4,
+        "shifted": True,
+        "right_op_type": "closed",
+        "rightmost_op_type": "half-open-right",
+        "x_right_elements": 0.9,
+        "color": "tab:red",
+        "marker": "d",
+        "skipfit_st": 0,
+    },
+    {
+        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{1-x}$",
+        "poly_order": 5,
+        "op_type": "closed",
+        "right_sqrt": True,
+        "sqrt_order": 4,
+        "shifted": False,
+        "right_op_type": "half-open-right",
+        "num_right_elements": 1,
+        "color": "tab:green",
+        "marker": "+",
+        "skipfit_st": 2,
+    },
+]
+
+RUNS = RUNS_LO_OPEN
+savefile = None #'sqrt_p3_closed.pdf'
+
+
+
+CACHE_FILE = Path(__file__).parent / "operator_cache.json"
 
 def load_cache() -> dict:
     if CACHE_FILE.exists() and CACHE_FILE.stat().st_size > 0:
@@ -179,7 +387,7 @@ def build_sqrt_operator(
     if optimize is None:
         optimize = True
 
-    cache_key = f"sqrt_p{p}_k{k}_{op_type}_opt{optimize}_{opt_method}_v13"
+    cache_key = f"sqrt_p{p}_k{k}_{op_type}_opt{optimize}_{opt_method}"
     cache = load_cache()
 
     if cache_key in cache:
@@ -211,7 +419,7 @@ def build_sqrt_operator(
 
     operator = build_operator_from_julia(
         op_basis, quad_basis, interval=(0.0, 1.0), precision="bigfloat",
-        digits=56, orthogonalize=True, principal=principal,
+        digits=56, orthogonalize=True, principal=principal, sbp_check_action="warn",
         **opt_kwargs
     )
 
@@ -224,199 +432,15 @@ def build_sqrt_operator(
     save_cache(cache)
     return dataclasses.replace(operator, name=f"SQRT_{cache_key}")
 
-DOMAIN = (0.0, 1.0)
-ELEMENT_COUNTS = [8, 16, 32, 64, 80, 100, 160, 200]
-COARSE_ELEMENTS = 16
-SAT_TYPE = "upwind"
-SHOW_PLOTS = True
-PLOT_SOLS = True
-ROOT_POWER = 0.5
-
-RUNS_LO_OPEN = [
-    {
-        "label": r"$\mathcal{P}_4$ (open)",
-        "poly_order": 4,
-        "op_type": "open",
-        "color": "tab:purple",
-        "marker": "o",
-    },
-    {
-        "label": r"$\mathcal{P}_5$ (open)",
-        "poly_order": 5,
-        "op_type": "open",
-        "color": "tab:blue",
-        "marker": "^",
-    },
-    {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$ ($x > 0.9$, open)",
-        "poly_order": 4,
-        "op_type": "open",
-        "right_sqrt": True,
-        "sqrt_order": 3,
-        "shifted": False,
-        "right_op_type": "open",
-        "x_right_elements": 0.9,
-        "color": "tab:orange",
-        "marker": "+",
-    },
-    {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.9$, open)",
-        "poly_order": 4,
-        "op_type": "open",
-        "right_sqrt": True,
-        "sqrt_order": 3,
-        "shifted": True,
-        "right_op_type": "open",
-        "x_right_elements": 0.9,
-        "color": "tab:red",
-        "marker": "d",
-    }
-]
-
-RUNS_HI_OPEN = [
-    {
-        "label": r"$\mathcal{P}_5$ (open)",
-        "poly_order": 5,
-        "op_type": "open",
-        "color": "tab:purple",
-        "marker": "o",
-    },
-    {
-        "label": r"$\mathcal{P}_6$ (open)",
-        "poly_order": 6,
-        "op_type": "open",
-        "color": "tab:blue",
-        "marker": "^",
-    },
-    {
-        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{1-x}$ ($x > 0.9$, open)",
-        "poly_order": 5,
-        "op_type": "open",
-        "right_sqrt": True,
-        "sqrt_order": 4,
-        "shifted": False,
-        "right_op_type": "open",
-        "x_right_elements": 0.9,
-        "color": "tab:orange",
-        "marker": "+",
-    },
-    {
-        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{k-x}$ ($x > 0.9$, open)",
-        "poly_order": 5,
-        "op_type": "open",
-        "right_sqrt": True,
-        "sqrt_order": 4,
-        "shifted": True,
-        "right_op_type": "open",
-        "x_right_elements": 0.9,
-        "color": "tab:red",
-        "marker": "d",
-    }
-]
-
-RUNS_LO_CLOSED = [
-    {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_4$ Radau (rightmost)",
-        "poly_order": 4,
-        "op_type": "closed",
-        "right_poly_op_type": "half-open-right",
-        "num_right_elements": 1,
-        "color": "tab:purple",
-        "marker": "o",
-    },
-    {
-        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_5$ Radau (rightmost)",
-        "poly_order": 5,
-        "op_type": "closed",
-        "right_poly_op_type": "half-open-right",
-        "num_right_elements": 1,
-        "color": "tab:blue",
-        "marker": "^",
-    },
-    {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{1-x}$ Radau (rightmost)",
-        "poly_order": 4,
-        "op_type": "closed",
-        "right_sqrt": True,
-        "sqrt_order": 3,
-        "shifted": False,
-        "right_op_type": "half-open-right",
-        "num_right_elements": 1,
-        "color": "tab:orange",
-        "marker": "+",
-    },
-    {
-        "label": r"$\mathcal{P}_4$ / $\mathcal{P}_3 + \sqrt{k-x}$ ($x > 0.9$, closed/Radau)",
-        "poly_order": 4,
-        "op_type": "closed",
-        "right_sqrt": True,
-        "sqrt_order": 3,
-        "shifted": True,
-        "right_op_type": "closed",
-        "rightmost_op_type": "half-open-right",
-        "x_right_elements": 0.9,
-        "color": "tab:red",
-        "marker": "d",
-    }
-]
-
-RUNS_HI_CLOSED = [
-    {
-        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_5$ Radau (rightmost)",
-        "poly_order": 5,
-        "op_type": "closed",
-        "right_poly_op_type": "half-open-right",
-        "num_right_elements": 1,
-        "color": "tab:purple",
-        "marker": "o",
-    },
-    {
-        "label": r"$\mathcal{P}_6$ / $\mathcal{P}_6$ Radau (rightmost)",
-        "poly_order": 6,
-        "op_type": "closed",
-        "right_poly_op_type": "half-open-right",
-        "num_right_elements": 1,
-        "color": "tab:blue",
-        "marker": "^",
-    },
-    {
-        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{1-x}$ Radau (rightmost)",
-        "poly_order": 5,
-        "op_type": "closed",
-        "right_sqrt": True,
-        "sqrt_order": 4,
-        "shifted": False,
-        "right_op_type": "half-open-right",
-        "num_right_elements": 1,
-        "color": "tab:orange",
-        "marker": "+",
-    },
-    {
-        "label": r"$\mathcal{P}_5$ / $\mathcal{P}_4 + \sqrt{k-x}$ ($x > 0.9$, closed/Radau)",
-        "poly_order": 5,
-        "op_type": "closed",
-        "right_sqrt": True,
-        "sqrt_order": 4,
-        "shifted": True,
-        "right_op_type": "closed",
-        "rightmost_op_type": "half-open-right",
-        "x_right_elements": 0.9,
-        "color": "tab:red",
-        "marker": "d",
-    }
-]
-
-RUNS = RUNS_LO_OPEN
-
 def static_component(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     base = np.clip(1.0 - x_arr, 0.0, None)
-    return 3.0 * np.power(base, ROOT_POWER)
+    return 2.0 * np.power(base, ROOT_POWER) 
 
 def singularity_f(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
     base = np.clip(1.0 - x_arr, 1e-16, None)
-    return -3.0 * ROOT_POWER * np.power(base, ROOT_POWER - 1.0)
+    return -2.0 * ROOT_POWER * np.power(base, ROOT_POWER - 1.0)
 
 #roughness 0.5(-x^2 + x)\sin(5\pi x)
 def roughness_exact(x: np.ndarray | float) -> np.ndarray:
@@ -554,14 +578,17 @@ def run_convergence(
 
 if __name__ == "__main__":
     EXPERIMENTS = [
-        {"label": "Smooth problem", "exact_fun": roughness_exact, "f_fun": roughness_f, "title": r"Smooth source problem"},
-        {"label": "Singularity only", "exact_fun": singularity_exact, "f_fun": singularity_f, "title": r"Singular source problem ($\sqrt{1-x}$)"},
-        {"label": "Mixed source", "exact_fun": u_exact, "f_fun": mixed_f, "title": r"Mixed source problem ($\sqrt{1-x}$)"},
+        {"label": "Smooth problem", "exact_fun": roughness_exact, "f_fun": roughness_f, "title": "Smooth Part Only"},
+        {"label": "Singularity only", "exact_fun": singularity_exact, "f_fun": singularity_f, "title": "Root Part Only"},
+        {"label": "Mixed source", "exact_fun": u_exact, "f_fun": mixed_f, "title": None, "ylim": (1e-14, 1e-2)},
     ]
 
     for experiment in EXPERIMENTS:
-        dof_rows, err_rows, profiles, labels = [], [], [], []
-        run_colors, run_markers = [], []
+        dof_rows, err_rows, labels = [], [], []
+        profiles, nodal_profiles, profile_labels = [], [], []
+        run_colors, run_markers, run_skipfit_st = [], [], []
+        profile_colors, profile_markers = [], []
+        default_skipfit_st = len(ELEMENT_COUNTS) - 3
         
         print(f"\n==========================================")
         print(f"Experiment: {experiment['label']}")
@@ -570,15 +597,30 @@ if __name__ == "__main__":
         for run in RUNS:
             try:
                 dofs, errors = run_convergence(run, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
-                coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
                 
                 dof_rows.append(dofs)
                 err_rows.append(errors)
-                profiles.append(profile_from_elements(coarse_elements, coarse_u))
                 labels.append(str(run["label"]))
                 run_colors.append(run.get("color", "black"))
                 run_markers.append(run.get("marker", "o"))
-                
+                run_skipfit_st.append(run.get("skipfit_st", default_skipfit_st))
+
+                # Keep convergence plots complete while allowing individual
+                # runs to be hidden from the solution profile plot.
+                if PLOT_SOLS and run.get("plot_solution_profile", True):
+                    coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
+                    profiles.append(
+                        profile_from_elements(
+                            coarse_elements,
+                            coarse_u,
+                            interpolate=INTERPOLATE_SOLUTION_PROFILES,
+                            points_per_element=PROFILE_POINTS_PER_ELEMENT,
+                        )
+                    )
+                    nodal_profiles.append(profile_from_elements(coarse_elements, coarse_u))
+                    profile_labels.append(str(run["label"]))
+                    profile_colors.append(run.get("color", "black"))
+                    profile_markers.append(run.get("marker", "o"))
             except Exception as e:
                 print(f"  [Skipped] {e}")
                 continue
@@ -587,21 +629,43 @@ if __name__ == "__main__":
             plot_convergence(
                 np.vstack(dof_rows), np.vstack(err_rows), labels,
                 title=experiment["title"],
-                grid=True, skipfit_st=[len(ELEMENT_COUNTS)-3] * len(dof_rows),
+                grid=True,
+                skipfit_st=run_skipfit_st,
                 colors=run_colors,
-                markers=run_markers
+                markers=run_markers,
+                legend_behind_data=True,
+                legendloc='lower left',
+                savefile=savefile,
+                ylim=experiment.get("ylim", None),
+                xlim=experiment.get("xlim", None),
             )
 
             x_exact, u_exact_vals = exact_profile_on_domain(experiment["exact_fun"], domain=DOMAIN)
-            if PLOT_SOLS: 
+            if PLOT_SOLS and profiles:
                 plot_solution_profiles(
-                    profiles, labels, x_exact=x_exact, u_exact=u_exact_vals,
-                    title=rf"{experiment['label']} solutions ({COARSE_ELEMENTS} elements)", grid=True,
-                    colors=run_colors,
-                    markers=run_markers
+                    profiles,
+                    profile_labels,
+                    nodal_profiles=nodal_profiles if INTERPOLATE_SOLUTION_PROFILES else None,
+                    x_exact=x_exact,
+                    u_exact=u_exact_vals,
+                    title=None, #rf"{experiment['label']} solutions ({COARSE_ELEMENTS} elements)",
+                    grid=True,
+                    colors=profile_colors,
+                    markers=profile_markers,
+                    linestyles=['--','--','--','--'],
+                    figsize=(5,3.5),
+                    legend_behind_data=True,
+                    title_size=16,
+                    tick_size=12,
+                    legendsize=12,
+                    legendloc='lower left',
+                    savefile=None,
+                    ylim=None,
                 )
 
     if SHOW_PLOTS:
-        plt.show(block=False)
-        input("Press Enter to close all plots...")
+        if sys.stdin.isatty():
+            plt.show(block=False)
+            input("Press Enter to close all plots...")
+        # Batch publication checks should finish without waiting for stdin.
         plt.close("all")

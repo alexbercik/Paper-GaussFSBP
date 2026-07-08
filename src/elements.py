@@ -17,6 +17,7 @@ OperatorChoice = Union[Operator, OperatorSpec, str]
 class Element1D:
     x_left: float
     x_right: float
+    operator: Operator
     x: np.ndarray
     D: np.ndarray
     H: np.ndarray
@@ -130,6 +131,7 @@ def make_elements(
             Element1D(
                 x_left=x_left,
                 x_right=x_right,
+                operator=operator,
                 x=x,
                 D=D,
                 H=H,

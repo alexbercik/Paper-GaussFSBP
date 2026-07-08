@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-import numpy as np
+from pathlib import Path
+import sys
+
 import matplotlib.pyplot as plt
+import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from src.assembly import assemble_system
 from src.elements import Element1D, make_uniform_elements
@@ -123,4 +130,8 @@ if __name__ == "__main__":
         grid=True,
     )
 
-    plt.show()
+    if sys.stdin.isatty():
+        plt.show()
+    else:
+        # Batch publication checks should finish without opening a GUI window.
+        plt.close("all")

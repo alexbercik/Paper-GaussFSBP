@@ -32,178 +32,18 @@ from src.plotting import (
 )
 from src.solve import solve_steady
 
-CACHE_FILE = Path(__file__).parent / "operator_cache_v6.json"
-
-def load_cache() -> dict:
-    if CACHE_FILE.exists() and CACHE_FILE.stat().st_size > 0:
-        try:
-            with open(CACHE_FILE, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, ValueError):
-            return {}
-    return {}
-
-def save_cache(cache: dict) -> None:
-    tmp_file = CACHE_FILE.with_suffix(".json.tmp")
-    with open(tmp_file, "w") as f:
-        json.dump(cache, f, indent=4)
-    tmp_file.replace(CACHE_FILE)
-
-def legendre_basis(num_functions: int) -> JuliaBasis:
-    if num_functions < 1:
-        raise ValueError("num_functions must be positive")
-    return JuliaBasis(
-        labels=[f"P_{degree}(x)" for degree in range(num_functions)],
-        factory=legendre_basis_factory(num_functions),
-    )
-
-def polynomial_bases(degree: int, operator_type: str) -> tuple[JuliaBasis, JuliaBasis]:
-    if degree < 1:
-        raise ValueError("degree must be at least 1")
-    op_basis = legendre_basis(degree + 1)
-    if operator_type == "closed":
-        quad_basis = legendre_basis(2 * degree)
-    elif operator_type == "open":
-        quad_basis = legendre_basis(2 * degree + 2)
-    else:
-        raise ValueError("op_type must be 'open' or 'closed'")
-    return op_basis, quad_basis
-
-def exponential_bases(
-    p: int,
-    alpha: float,
-    alpha_divisor: int = 1,
-) -> tuple[JuliaBasis, JuliaBasis]:
-    alpha_text = repr(alpha)
-    scaled_alpha_text = alpha_text if alpha_divisor == 1 else f"({alpha_text}/{alpha_divisor})"
-    julia_alpha = f'(parse(T, "{alpha_text}") / {alpha_divisor})'
-
-    exp_function = f"let a = {julia_alpha}; x -> exp(a * x); end"
-    exp_derivative = f"let a = {julia_alpha}; x -> a * exp(a * x); end"
-    
-    op_basis = JuliaBasis(
-        labels=[*[f"P_{degree}(x)" for degree in range(p + 1)], f"exp({scaled_alpha_text}x)"],
-        factory=legendre_basis_factory(p + 1, additional_functions=[exp_function], additional_derivatives=[exp_derivative]),
-    )
-
-    num_quad_polynomials = 2 * p
-    num_quad_functions = num_quad_polynomials + (p + 1) + 1
-    
-    if num_quad_functions % 2 != 0:
-        num_quad_polynomials += 1
-
-    quad_labels = [f"P_{degree}(x)" for degree in range(num_quad_polynomials)]
-    additional_functions, additional_derivatives = [], []
-
-    for degree in range(p + 1):
-        power = "one(x)" if degree == 0 else f"x^{degree}"
-        quad_labels.append(f"x^{degree} exp({scaled_alpha_text}x)")
-        additional_functions.append(f"let a = {julia_alpha}; x -> {power} * exp(a * x); end")
-        deriv = "a * exp(a * x)" if degree == 0 else f"({degree} * x^{degree - 1} + a * x^{degree}) * exp(a * x)"
-        additional_derivatives.append(f"let a = {julia_alpha}; x -> {deriv}; end")
-
-    quad_labels.append(f"exp(2 * {scaled_alpha_text}x)")
-    additional_functions.append(f"let a = {julia_alpha}; x -> exp(2 * a * x); end")
-    additional_derivatives.append(f"let a = {julia_alpha}; x -> 2 * a * exp(2 * a * x); end")
-
-    quad_basis = JuliaBasis(
-        labels=quad_labels,
-        factory=legendre_basis_factory(num_quad_polynomials, additional_functions=additional_functions, additional_derivatives=additional_derivatives),
-    )
-    return op_basis, quad_basis
-
-def build_exponential_operator(
-    p: int,
-    alpha: float,
-    op_type: str,
-    *,
-    alpha_divisor: int = 1,
-    optimize: bool,
-    opt_method: str = "simultaneous",
-) -> Operator:
-    
-    cache_key = f"exp_p{p}_alpha{repr(alpha)}_div{alpha_divisor}_opt{optimize}_{opt_method}_{op_type}_v6"
-    cache = load_cache()
-
-    if cache_key in cache:
-        data = cache[cache_key]
-        return Operator(
-            name=f"EXP_{cache_key}", basis=data["basis"], quad_basis=data["quad_basis"],
-            op_type=data["op_type"], selector=data.get("selector", 0),
-            interval=np.array(data["interval"]), nodes=np.array(data["nodes"]),
-            D=np.array(data["D"]), H=np.array(data["H"]),
-            tL=np.array(data["tL"]), tR=np.array(data["tR"])
-        )
-
-    print(f"  -> Cache miss. Generating {op_type.upper()} EXP operator (p={p}, div={alpha_divisor}, opt={optimize}, method={opt_method})...")
-    
-    op_basis, quad_basis = exponential_bases(p, alpha, alpha_divisor)
-    principal = "upper" if op_type == "closed" else "lower"
-    julia_alpha = f'(parse(T, "{repr(alpha)}") / {alpha_divisor})'
-
-    opt_funcs = (
-        f"[x -> x^{p + 1}, let a = {julia_alpha}; x -> x * exp(a * x); end, "
-        f"let a = {julia_alpha}; x -> x^2 * exp(a * x); end, let a = {julia_alpha}; x -> exp(2 * a * x); end]"
-    )
-    opt_derivs = (
-        f"[x -> {p + 1} * x^{p}, let a = {julia_alpha}; x -> (1 + a * x) * exp(a * x); end, "
-        f"let a = {julia_alpha}; x -> (2 * x + a * x^2) * exp(a * x); end, let a = {julia_alpha}; x -> 2 * a * exp(2 * a * x); end]"
-    )
-
-    operator = build_operator_from_julia(
-        op_basis, quad_basis, interval=(0.0, 1.0), precision="bigfloat",
-        digits=42, orthogonalize=True, principal=principal,
-        use_optimization=optimize, opt_method=opt_method,
-        test_functions=opt_funcs, test_derivatives=opt_derivs,
-        test_weights=[1, 1, 1, 4], extrapolation_objective_weights=[1.0, 0.1], S_objective_weights=[1.0, 0.1]
-    )
-
-    cache[cache_key] = {
-        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": operator.op_type,
-        "selector": 0, "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
-        "D": operator.D.tolist(), "H": operator.H.tolist(),
-        "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
-    }
-    save_cache(cache)
-    return dataclasses.replace(operator, name=f"EXP_{cache_key}")
-
-def build_polynomial_operator(degree: int, op_type: str) -> Operator:  
-    cache_key = f"poly_p{degree}_{op_type}"
-    cache = load_cache()
-
-    if cache_key in cache:
-        data = cache[cache_key]
-        return Operator(
-            name=f"POLY_{cache_key}", basis=data["basis"], quad_basis=data["quad_basis"],
-            op_type=data["op_type"], selector=0, interval=np.array(data["interval"]),
-            nodes=np.array(data["nodes"]), D=np.array(data["D"]), H=np.array(data["H"]),
-            tL=np.array(data["tL"]), tR=np.array(data["tR"])
-        )
-
-    print(f"  -> Cache miss. Generating {op_type.upper()} polynomial p{degree} operator...")
-    op_basis, quad_basis = polynomial_bases(degree, op_type)
-    principal = "upper" if op_type == "closed" else "lower"
-
-    operator = build_operator_from_julia(
-        op_basis, quad_basis, interval=(0.0, 1.0), precision="bigfloat",
-        digits=42, orthogonalize=True, principal=principal
-    )
-
-    cache[cache_key] = {
-        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": operator.op_type,
-        "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
-        "D": operator.D.tolist(), "H": operator.H.tolist(),
-        "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
-    }
-    save_cache(cache)
-    return dataclasses.replace(operator, name=f"POLY_{cache_key}")
+CACHE_FILE = Path(__file__).parent / "operator_cache.json"
 
 DOMAIN = (0.0, 1.0)
-ELEMENT_COUNTS = [8, 16, 32, 64, 80, 100]
-COARSE_ELEMENTS = 100
+ELEMENT_COUNTS = [4, 8, 16, 32, 64, 100]
+COARSE_ELEMENTS = 2
 SAT_TYPE = "upwind"
 SHOW_PLOTS = True
 PLOT_SOLS = True
+PLOT_COMPARISON_RUNS = False
+INTERPOLATE_SOLUTION_PROFILES = True
+PROFILE_POINTS_PER_ELEMENT = 50
+EPSILON = 0.0125 #0.0125 # inverse strength of exponential part
 
 RUNS_LO_CLOSED = [
     {
@@ -214,6 +54,7 @@ RUNS_LO_CLOSED = [
         "x_right_elements": None,
         "color": "tab:purple",
         "marker": "o",
+        "skipfit_st": 2,
     },
     {
         "label": r"$\mathcal{P}_5$",
@@ -223,6 +64,7 @@ RUNS_LO_CLOSED = [
         "x_right_elements": None,
         "color": "tab:blue",
         "marker": "^",
+        "skipfit_st": 2,
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$, min-norm",
@@ -233,9 +75,11 @@ RUNS_LO_CLOSED = [
         "x_right_elements": None,
         "color": "tab:green",
         "marker": "s",
+        "skipfit_st": 3,
+        "plot_solution_profile": False,
     },
     {
-        "label": r"$\mathcal{P}_3 + e^{\alpha x}$, simultaneous",
+        "label": r"$\mathcal{P}_3 + e^{\alpha x}$, optimized",
         "optimized": True,
         "order": 3,
         "opt_method": "simultaneous",
@@ -244,6 +88,7 @@ RUNS_LO_CLOSED = [
         "x_right_elements": None,
         "color": "tab:red",
         "marker": "d",
+        "skipfit_st": 0,
     },
 ]
 
@@ -256,6 +101,7 @@ RUNS_HI_CLOSED = [
         "x_right_elements": None,
         "color": "tab:purple",
         "marker": "o",
+        "skipfit_st": 2,
     },
     {
         "label": r"$\mathcal{P}_6$",
@@ -265,6 +111,7 @@ RUNS_HI_CLOSED = [
         "x_right_elements": None,
         "color": "tab:blue",
         "marker": "^",
+        "skipfit_st": 2,
     },
     {
         "label": r"$\mathcal{P}_4 + e^{\alpha x}$, min-norm",
@@ -275,9 +122,11 @@ RUNS_HI_CLOSED = [
         "x_right_elements": None,
         "color": "tab:green",
         "marker": "s",
+        "skipfit_st": 3,
+        "plot_solution_profile": False,
     },
     {
-        "label": r"$\mathcal{P}_4 + e^{\alpha x}$, simultaneous",
+        "label": r"$\mathcal{P}_4 + e^{\alpha x}$, optimized",
         "optimized": True,
         "order": 4,
         "opt_method": "simultaneous",
@@ -286,6 +135,7 @@ RUNS_HI_CLOSED = [
         "x_right_elements": None,
         "color": "tab:red",
         "marker": "d",
+        "skipfit_st": 0,
     },
 ]
 
@@ -298,6 +148,7 @@ RUNS_LO_OPEN = [
         "x_right_elements": None,
         "color": "tab:purple",
         "marker": "o",
+        "skipfit_st": 2,
     },
     {
         "label": r"$\mathcal{P}_5$",
@@ -307,6 +158,7 @@ RUNS_LO_OPEN = [
         "x_right_elements": None,
         "color": "tab:blue",
         "marker": "^",
+        "skipfit_st": 2,
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$, min-norm",
@@ -317,6 +169,8 @@ RUNS_LO_OPEN = [
         "x_right_elements": None,
         "color": "tab:green",
         "marker": "s",
+        "skipfit_st": 1,
+        "plot_solution_profile": False,
     },
     {
         "label": r"$\mathcal{P}_3 + e^{\alpha x}$, simultaneous",
@@ -328,27 +182,30 @@ RUNS_LO_OPEN = [
         "x_right_elements": None,
         "color": "tab:red",
         "marker": "d",
+        "skipfit_st": 1,
     },
 ]
 
 RUNS_HI_OPEN = [
-    {
-        "label": r"$\mathcal{P}_4$",
-        "poly_order": 4,
-        "op_type": "open",
-        "num_right_elements": 0,
-        "x_right_elements": None,
-        "color": "tab:purple",
-        "marker": "o",
-    },
     {
         "label": r"$\mathcal{P}_5$",
         "poly_order": 5,
         "op_type": "open",
         "num_right_elements": 0,
         "x_right_elements": None,
+        "color": "tab:purple",
+        "marker": "o",
+        "skipfit_st": 2,
+    },
+    {
+        "label": r"$\mathcal{P}_6$",
+        "poly_order": 6,
+        "op_type": "open",
+        "num_right_elements": 0,
+        "x_right_elements": None,
         "color": "tab:blue",
         "marker": "^",
+        "skipfit_st": 2,
     },
     {
         "label": r"$\mathcal{P}_4 + e^{\alpha x}$, min-norm",
@@ -359,6 +216,8 @@ RUNS_HI_OPEN = [
         "x_right_elements": None,
         "color": "tab:green",
         "marker": "s",
+        "skipfit_st": 0,
+        "plot_solution_profile": False,
     },
     {
         "label": r"$\mathcal{P}_4 + e^{\alpha x}$, simultaneous",
@@ -370,6 +229,7 @@ RUNS_HI_OPEN = [
         "x_right_elements": None,
         "color": "tab:red",
         "marker": "d",
+        "skipfit_st": 0,
     },
 ]
 
@@ -425,17 +285,182 @@ COMPARISON_RUNS = [
 ]
 
 RUNS = RUNS_LO_CLOSED
+savefile=None #'exp_mixed_p4_open_eps00125.pdf'
+
+def load_cache() -> dict:
+    if CACHE_FILE.exists() and CACHE_FILE.stat().st_size > 0:
+        try:
+            with open(CACHE_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    return {}
+
+def save_cache(cache: dict) -> None:
+    tmp_file = CACHE_FILE.with_suffix(".json.tmp")
+    with open(tmp_file, "w") as f:
+        json.dump(cache, f, indent=4)
+    tmp_file.replace(CACHE_FILE)
+
+def legendre_basis(num_functions: int) -> JuliaBasis:
+    if num_functions < 1:
+        raise ValueError("num_functions must be positive")
+    return JuliaBasis(
+        labels=[f"P_{degree}(x)" for degree in range(num_functions)],
+        factory=legendre_basis_factory(num_functions),
+    )
+
+def polynomial_bases(degree: int, operator_type: str) -> tuple[JuliaBasis, JuliaBasis]:
+    if degree < 1:
+        raise ValueError("degree must be at least 1")
+    op_basis = legendre_basis(degree + 1)
+    if operator_type == "closed":
+        quad_basis = legendre_basis(2 * degree)
+    elif operator_type == "open":
+        quad_basis = legendre_basis(2 * degree + 2)
+    else:
+        raise ValueError("op_type must be 'open' or 'closed'")
+    return op_basis, quad_basis
+
+def exponential_bases(
+    p: int,
+    alpha: float,
+    alpha_divisor: int = 1,
+) -> tuple[JuliaBasis, JuliaBasis]:
+    alpha_text = repr(alpha)
+    scaled_alpha_text = alpha_text if alpha_divisor == 1 else f"({alpha_text}/{alpha_divisor})"
+    julia_alpha = f'(parse(T, "{alpha_text}") / {alpha_divisor})'
+
+    exp_function = f"let a = {julia_alpha}; x -> exp(a * x); end"
+    exp_derivative = f"let a = {julia_alpha}; x -> a * exp(a * x); end"
+
+    op_basis = JuliaBasis(
+        labels=[*[f"P_{degree}(x)" for degree in range(p + 1)], f"exp({scaled_alpha_text}x)"],
+        factory=legendre_basis_factory(p + 1, additional_functions=[exp_function], additional_derivatives=[exp_derivative]),
+    )
+
+    num_quad_polynomials = 2 * p
+    num_quad_functions = num_quad_polynomials + (p + 1) + 1
+
+    if num_quad_functions % 2 != 0:
+        num_quad_polynomials += 1
+
+    quad_labels = [f"P_{degree}(x)" for degree in range(num_quad_polynomials)]
+    additional_functions, additional_derivatives = [], []
+
+    for degree in range(p + 1):
+        power = "one(x)" if degree == 0 else f"x^{degree}"
+        quad_labels.append(f"x^{degree} exp({scaled_alpha_text}x)")
+        additional_functions.append(f"let a = {julia_alpha}; x -> {power} * exp(a * x); end")
+        deriv = "a * exp(a * x)" if degree == 0 else f"({degree} * x^{degree - 1} + a * x^{degree}) * exp(a * x)"
+        additional_derivatives.append(f"let a = {julia_alpha}; x -> {deriv}; end")
+
+    quad_labels.append(f"exp(2 * {scaled_alpha_text}x)")
+    additional_functions.append(f"let a = {julia_alpha}; x -> exp(2 * a * x); end")
+    additional_derivatives.append(f"let a = {julia_alpha}; x -> 2 * a * exp(2 * a * x); end")
+
+    quad_basis = JuliaBasis(
+        labels=quad_labels,
+        factory=legendre_basis_factory(num_quad_polynomials, additional_functions=additional_functions, additional_derivatives=additional_derivatives),
+    )
+    return op_basis, quad_basis
+
+def build_exponential_operator(
+    p: int,
+    alpha: float,
+    op_type: str,
+    *,
+    alpha_divisor: int = 1,
+    optimize: bool,
+    opt_method: str = "simultaneous",
+) -> Operator:
+
+    cache_key = f"exp_p{p}_alpha{repr(alpha)}_div{alpha_divisor}_opt{optimize}_{opt_method}_{op_type}"
+    cache = load_cache()
+
+    if cache_key in cache:
+        data = cache[cache_key]
+        return Operator(
+            name=f"EXP_{cache_key}", basis=data["basis"], quad_basis=data["quad_basis"],
+            op_type=data["op_type"], selector=data.get("selector", 0),
+            interval=np.array(data["interval"]), nodes=np.array(data["nodes"]),
+            D=np.array(data["D"]), H=np.array(data["H"]),
+            tL=np.array(data["tL"]), tR=np.array(data["tR"])
+        )
+
+    print(f"  -> Cache miss. Generating {op_type.upper()} EXP operator (p={p}, div={alpha_divisor}, opt={optimize}, method={opt_method})...")
+
+    op_basis, quad_basis = exponential_bases(p, alpha, alpha_divisor)
+    principal = "upper" if op_type == "closed" else "lower"
+    julia_alpha = f'(parse(T, "{repr(alpha)}") / {alpha_divisor})'
+
+    opt_funcs = (
+        f"[x -> x^{p + 1}, let a = {julia_alpha}; x -> x * exp(a * x); end, "
+        f"let a = {julia_alpha}; x -> x^2 * exp(a * x); end, let a = {julia_alpha}; x -> exp(2 * a * x); end]"
+    )
+    opt_derivs = (
+        f"[x -> {p + 1} * x^{p}, let a = {julia_alpha}; x -> (1 + a * x) * exp(a * x); end, "
+        f"let a = {julia_alpha}; x -> (2 * x + a * x^2) * exp(a * x); end, let a = {julia_alpha}; x -> 2 * a * exp(2 * a * x); end]"
+    )
+
+    operator = build_operator_from_julia(
+        op_basis, quad_basis, interval=(0.0, 1.0), precision="bigfloat",
+        digits=42, orthogonalize=True, principal=principal,
+        use_optimization=optimize, opt_method=opt_method,
+        test_functions=opt_funcs, test_derivatives=opt_derivs,
+        test_weights=[4, 1, 1, 1], extrapolation_objective_weights=[1.0, 0.1], S_objective_weights=[1.0, 0.1]
+    )
+
+    cache[cache_key] = {
+        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": operator.op_type,
+        "selector": 0, "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
+        "D": operator.D.tolist(), "H": operator.H.tolist(),
+        "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
+    }
+    save_cache(cache)
+    return dataclasses.replace(operator, name=f"EXP_{cache_key}")
+
+def build_polynomial_operator(degree: int, op_type: str) -> Operator:
+    cache_key = f"poly_p{degree}_{op_type}"
+    cache = load_cache()
+
+    if cache_key in cache:
+        data = cache[cache_key]
+        return Operator(
+            name=f"POLY_{cache_key}", basis=data["basis"], quad_basis=data["quad_basis"],
+            op_type=data["op_type"], selector=0, interval=np.array(data["interval"]),
+            nodes=np.array(data["nodes"]), D=np.array(data["D"]), H=np.array(data["H"]),
+            tL=np.array(data["tL"]), tR=np.array(data["tR"])
+        )
+
+    print(f"  -> Cache miss. Generating {op_type.upper()} polynomial p{degree} operator...")
+    op_basis, quad_basis = polynomial_bases(degree, op_type)
+    principal = "upper" if op_type == "closed" else "lower"
+
+    operator = build_operator_from_julia(
+        op_basis, quad_basis, interval=(0.0, 1.0), precision="bigfloat",
+        digits=42, orthogonalize=True, principal=principal
+    )
+
+    cache[cache_key] = {
+        "basis": op_basis.labels, "quad_basis": quad_basis.labels, "op_type": operator.op_type,
+        "interval": [0.0, 1.0], "nodes": operator.nodes.tolist(),
+        "D": operator.D.tolist(), "H": operator.H.tolist(),
+        "tL": operator.tL.tolist(), "tR": operator.tR.tolist()
+    }
+    save_cache(cache)
+    return dataclasses.replace(operator, name=f"POLY_{cache_key}")
 
 def static_component(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
-    epsilon = 0.0125
+    epsilon = EPSILON
     num = np.exp((x_arr - 1.0) / epsilon) - np.exp(-1.0 / epsilon)
     den = 1.0 - np.exp(-1.0 / epsilon)
     return num / den - x_arr + 1.0
 
 def singularity_f(x: np.ndarray | float) -> np.ndarray:
     x_arr = np.asarray(x, dtype=float)
-    epsilon = 0.0125
+    epsilon = EPSILON
     num = (1.0 / epsilon) * np.exp((x_arr - 1.0) / epsilon)
     den = 1.0 - np.exp(-1.0 / epsilon)
     return num / den - 1.0
@@ -483,7 +508,9 @@ def operators_for_mesh(run: dict[str, object], num_elements: int) -> list[Operat
     num_interior = num_elements - num_right
     
     domain_len = DOMAIN[1] - DOMAIN[0]
-    global_alpha = domain_len / 0.0125  
+    # The exponential basis is defined on each reference element. A physical
+    # layer exp(x / epsilon) therefore becomes exp((h / epsilon) xi).
+    global_alpha = domain_len / EPSILON
 
     int_op_type = run["op_type"]
 
@@ -575,14 +602,17 @@ def run_convergence(
 
 if __name__ == "__main__":
     EXPERIMENTS = [
-        {"label": "Smooth problem", "exact_fun": roughness_exact, "f_fun": roughness_f, "title": r"Smooth source problem"},
-        {"label": "Singularity only", "exact_fun": singularity_exact, "f_fun": singularity_f, "title": r"Singular source problem ($e^{\alpha x}$)"},
-        {"label": "Mixed source", "exact_fun": u_exact, "f_fun": mixed_f, "title": r"Mixed source problem ($e^{\alpha x}$)"},
+        {"label": "Smooth problem", "exact_fun": roughness_exact, "f_fun": roughness_f, "title": "Smooth Part Only"},
+        {"label": "Singularity only", "exact_fun": singularity_exact, "f_fun": singularity_f, "title": "Exponential Part Only"},
+        {"label": "Mixed source", "exact_fun": u_exact, "f_fun": mixed_f, "title": None, "ylim": (1e-14, 1), "xlim": (16, 900) } #r"Mixed source problem ($e^{\alpha x}$)"},
     ]
 
     for experiment in EXPERIMENTS:
-        dof_rows, err_rows, profiles, labels = [], [], [], []
-        run_colors, run_markers = [], []
+        dof_rows, err_rows, labels = [], [], []
+        profiles, nodal_profiles, profile_labels = [], [], []
+        run_colors, run_markers, run_skipfit_st = [], [], []
+        profile_colors, profile_markers = [], []
+        default_skipfit_st = len(ELEMENT_COUNTS) - 3
         
         print(f"\n==========================================")
         print(f"Experiment: {experiment['label']}")
@@ -591,14 +621,30 @@ if __name__ == "__main__":
         for run in RUNS:
             try:
                 dofs, errors = run_convergence(run, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
-                coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
                 
                 dof_rows.append(dofs)
                 err_rows.append(errors)
-                profiles.append(profile_from_elements(coarse_elements, coarse_u))
                 labels.append(str(run["label"]))
                 run_colors.append(run.get("color", "black"))
                 run_markers.append(run.get("marker", "o"))
+                run_skipfit_st.append(run.get("skipfit_st", default_skipfit_st))
+
+                # Keep convergence plots complete while allowing noisy or
+                # auxiliary runs to be hidden from the solution profile plot.
+                if PLOT_SOLS and run.get("plot_solution_profile", True):
+                    coarse_elements, coarse_u = solve_on_mesh(run, COARSE_ELEMENTS, exact_fun=experiment["exact_fun"], f_fun=experiment["f_fun"])
+                    profiles.append(
+                        profile_from_elements(
+                            coarse_elements,
+                            coarse_u,
+                            interpolate=INTERPOLATE_SOLUTION_PROFILES,
+                            points_per_element=PROFILE_POINTS_PER_ELEMENT,
+                        )
+                    )
+                    nodal_profiles.append(profile_from_elements(coarse_elements, coarse_u))
+                    profile_labels.append(str(run["label"]))
+                    profile_colors.append(run.get("color", "black"))
+                    profile_markers.append(run.get("marker", "o"))
             except Exception as e:
                 print(f"  [Skipped] {e}")
                 continue
@@ -607,48 +653,71 @@ if __name__ == "__main__":
             plot_convergence(
                 np.vstack(dof_rows), np.vstack(err_rows), labels,
                 title=experiment["title"],
-                grid=True, skipfit_st=[(len(ELEMENT_COUNTS)-3)] * len(dof_rows),
+                grid=True,
+                skipfit_st=run_skipfit_st,
                 colors=run_colors,
-                markers=run_markers
+                markers=run_markers,
+                legend_behind_data=True,
+                legendloc='lower left',
+                savefile=savefile,
+                ylim=experiment.get("ylim", None),
+                xlim=experiment.get("xlim", None),
             )
 
             x_exact, u_exact_vals = exact_profile_on_domain(experiment["exact_fun"], domain=DOMAIN)
-            if PLOT_SOLS: 
+            if PLOT_SOLS and profiles:
                 plot_solution_profiles(
-                    profiles, labels, x_exact=x_exact, u_exact=u_exact_vals,
-                    title=rf"{experiment['label']} solutions ({COARSE_ELEMENTS} elements)", grid=True,
-                    colors=run_colors,
-                    markers=run_markers
+                    profiles,
+                    profile_labels,
+                    nodal_profiles=nodal_profiles if INTERPOLATE_SOLUTION_PROFILES else None,
+                    x_exact=x_exact,
+                    u_exact=u_exact_vals,
+                    title=None, #rf"{experiment['label']} solutions ({COARSE_ELEMENTS} elements)",
+                    grid=True,
+                    colors=profile_colors,
+                    markers=profile_markers,
+                    linestyles=['--','--','--','--'],
+                    figsize=(5,3.5),
+                    legend_behind_data=True,
+                    title_size=16,
+                    tick_size=12,
+                    legendsize=12,
+                    legendloc='lower left',
+                    savefile=None, #'exp_mixed_p3_open_eps00125_sol.pdf',
+                    ylim=None, #(0.0, 1.1),
                 )
 
     print("\n" + "="*60)
     print("Experiment: SAT Type & Optimization Comparison (Mixed Source)")
     print("="*60)
-    
-    comp_dof_rows, comp_err_rows, comp_labels = [], [], []
-    comp_colors, comp_markers = [], []
-    for run in COMPARISON_RUNS:
-        try:
-            dofs, errors = run_convergence(run, exact_fun=u_exact, f_fun=mixed_f)
-            comp_dof_rows.append(dofs)
-            comp_err_rows.append(errors)
-            comp_labels.append(str(run["label"]))
-            comp_colors.append(run.get("color", "black"))
-            comp_markers.append(run.get("marker", "o"))
-        except Exception as e:
-            print(f"  [Skipped] {e}")
-            continue
-        
-    if comp_dof_rows:
-        plot_convergence(
-            np.vstack(comp_dof_rows), np.vstack(comp_err_rows), comp_labels,
-            title=r"Optimization and SAT Type Comparison (Mixed source: $e^{\alpha x}$)",
-            grid=True, skipfit_st=[1] * len(comp_dof_rows),
-            colors=comp_colors,
-            markers=comp_markers
-        )
+
+    if PLOT_COMPARISON_RUNS:
+        comp_dof_rows, comp_err_rows, comp_labels = [], [], []
+        comp_colors, comp_markers = [], []
+        for run in COMPARISON_RUNS:
+            try:
+                dofs, errors = run_convergence(run, exact_fun=u_exact, f_fun=mixed_f)
+                comp_dof_rows.append(dofs)
+                comp_err_rows.append(errors)
+                comp_labels.append(str(run["label"]))
+                comp_colors.append(run.get("color", "black"))
+                comp_markers.append(run.get("marker", "o"))
+            except Exception as e:
+                print(f"  [Skipped] {e}")
+                continue
+            
+        if comp_dof_rows:
+            plot_convergence(
+                np.vstack(comp_dof_rows), np.vstack(comp_err_rows), comp_labels,
+                title=r"Optimization and SAT Type Comparison (Mixed source: $e^{\alpha x}$)",
+                grid=True, skipfit_st=[1] * len(comp_dof_rows),
+                colors=comp_colors,
+                markers=comp_markers
+            )
 
     if SHOW_PLOTS:
-        plt.show(block=False)
-        input("Press Enter to close all plots...")
+        if sys.stdin.isatty():
+            plt.show(block=False)
+            input("Press Enter to close all plots...")
+        # Batch publication checks should finish without waiting for stdin.
         plt.close("all")

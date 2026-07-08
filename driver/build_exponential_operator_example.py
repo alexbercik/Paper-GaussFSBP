@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
 import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from src import JuliaBasis, build_operator_from_julia, check_sbp_property
 from src.elements import make_uniform_elements
@@ -74,8 +81,6 @@ def main() -> None:
         print_num_digits=16,
     )
 
-    #print(f"nodes = {operator.nodes}")
-    #print(f"weights = {operator.H}")
     print(f"SBP check passed: {check_sbp_property(operator, tol=1e-9)}")
 
     elements = make_uniform_elements(
