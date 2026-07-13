@@ -1,168 +1,119 @@
 # Paper-GaussFSBP
 
-`gaussfsbp` is an initial 1D generalized SBP-SAT solver for forced linear advection.
+This repository contains the reproduction code for the paper
 
-## Model and sign convention
+> **Construction and Optimization of Summation-by-Parts Operators for General
+> Function Spaces Using an Improved Generalized Gaussian Quadrature Algorithm**
+>
+> Alex Bercik, Lisa Patrascu, and David Zingg, 2026.
 
-The semidiscrete equation is
+ArXiv link: https://arxiv.org/abs/2607.08934.
 
-u_t + A D(Bu) = f + SAT(u),
+The scripts reproduce the one-dimensional SBP-SAT experiments used to compare
+polynomial operators with operators built for enriched function spaces, including
+exponential and endpoint-singular bases. The Julia-backed operator construction
+is provided by `GaussFSBP` and `GeneralizedGauss`; this repository supplies the
+Python assembly, solve, plotting, and driver code used for the paper figures and
+tables.
 
-so
+## Repository Layout
 
-u_t = f - A D(Bu) + SAT(u).
-
-The steady system is assembled as
-
-A D(Bu) - SAT_linear(u) = f + SAT_known,
-
-and solved as a sparse linear system `L u = rhs`.
-
-`calc_RHS(elements, u, ...)` evaluates the semidiscrete update directly. If no
-left inflow function is passed, it uses the exact value stored on the leftmost
-element; pass `left_bc_fun=lambda _x: 0.0` for a homogeneous inflow.
-`calc_LHS(elements, ...)` builds the homogeneous steady matrix `L`, so the
-homogeneous Jacobian satisfies `d(calc_RHS)/du = -L`.
-
-The strong-form hook is always `A D(Bu)`, with
-- conservative form: `a(x)=1`, variable `b(x)`
-- non-conservative form: variable `a(x)`, `b(x)=1`
-- general form: arbitrary positive `a(x)`, `b(x)`.
-
-No split forms are used.
-
-## Operators and reference element
-
-Operators live on reference element `[-1, 1]` and use dictionary fields:
-
-- `name` as a unique string identifier, or `None` for unnamed operators
-- `basis`, `quad_basis`
-- `op_type` in `{open, closed, half-open-left, half-open-right}`
-- `interval`, `nodes`, `D`, `H`, `tL`, `tR`, `selector`
-
-Reference operators live in `src/operator_library.py`. Use `OperatorSpec` or
-`get_operator(...)` to choose entries by `(basis, quad_basis, op_type,
-selector)`; ``basis`` and ``quad_basis`` are matched up to permutation.
-``selector`` defaults to ``0``. Named operators can also be selected directly
-with `get_operator("LGLp2")`, `get_operator_by_name("LGLp2")`, or
-`OperatorSpec(name="LGLp2")`; unnamed operators are available only through the
-structural lookup key.
-
-Affine element scaling for `[x_L, x_R]`, `h = x_R - x_L`, and reference
-length `L_ref = interval[1] - interval[0]`:
-- `D = (L_ref/h) D_ref`
-- `H = (h/L_ref) H_ref`.
-
-`H` is diagonal and stored as a vector.
-
-## Elements and SAT coupling
-
-Build elements directly from physical element bounds and one reference operator
-choice, or a list with one choice per element:
-
-```python
-operator = OperatorSpec(["1", "x", "x^2"], ["1", "x", "x^2", "x^3"], "closed")
-elements = make_uniform_elements((0.0, 1.0), 8, operator, a_fun, b_fun, f_fun)
-```
-
-Named operators can be passed directly:
-
-```python
-elements = make_uniform_elements((0.0, 1.0), 8, "LGLp2", a_fun, b_fun, f_fun)
-```
-
-For mixed reference operators, pass `operators=[op0, op1, ...]` to
-`make_elements(bounds, operators, ...)`.
-
-Each element owns local nodal state values. Interface nodal values are duplicated across neighboring elements and coupled weakly through SATs.
-
-For element `j`, the SAT added to `du/dt` is
-
-```
-SAT_j = A_j H_j^{-1} [
-    tL_j (f*_{j-1/2} - tL_j^T B_j u_j)
-    - tR_j (f*_{j+1/2} - tR_j^T B_j u_j)
-]
-```
-
-At an interior interface, the left and right flux states are
-`tR_j^T B_j u_j` and `tL_{j+1}^T B_{j+1} u_{j+1}`. The symmetric flux averages
-these states; the positive-speed upwind/Rusanov flux uses the left state.
-
-At the physical left boundary, positive-speed inflow is imposed with the upwind
-flux `f* = b(x_L) u_bc(x_L)`, giving
-`SAT^L = A H^{-1} tL (b(x_L) u_bc(x_L) - tL^T B u)`. At the physical right
-boundary, `f* = tR^T B u`, so the outflow SAT is zero.
-
-All boundary and interface traces are computed using `tL` and `tR`. No hard-coded endpoint indexing is used.
-
-This gives one code path for open/closed/half-open operators.
-
-## Solver and sparse format
-
-The initial solver assembles dense local element blocks and global sparse matrix with `scipy.sparse.bmat`, then converts to CSC and solves with `scipy.sparse.linalg.splu`.
-
-BSR is not the default because local enrichment can produce different element node counts.
-
-## Layout
-
-Core solver modules live under the `src` package. Cross-language bridge code
-and local Julia dependency wiring live under root-level `lib`. Import from the
-repo root, e.g. `from src.assembly import assemble_system, calc_LHS, calc_RHS`.
-
-```
+```text
 Paper-GaussFSBP/
-  pyproject.toml
-  lib/
-    __init__.py
-    julia_operators.py
-    julia/
-      Project.toml
-      Manifest.toml
-    GaussFSBP -> ../../GaussFSBP
-  src/
-    __init__.py
-    operator_library.py
-    assembly.py
-    elements.py
-    norms.py
-    operators.py
-    problems.py
-    sats.py
-    solve.py
-  examples/smooth_sanity_check.py
-  tests/
+  driver/                 paper reproduction scripts
+  lib/julia/              Julia project used by the Python-Julia bridge
+  lib/julia_operators.py  bridge from Python to GaussFSBP
+  src/                    1D SBP-SAT assembly, solve, norms, and plotting
+  tests/                  small Python smoke-test suite
 ```
 
-## Quick start
+`driver/operator_cache.json` stores precomputed operators used by some driver
+scripts. If an entry is missing, the drivers rebuild it through Julia.
 
-Use Python 3.10 or newer. From the repository root, create a virtual environment,
-install the project in editable mode (this reads `pyproject.toml` and installs
-`numpy` and `scipy`), then run tests or examples:
+## Dependencies
+
+Python dependencies are listed in `pyproject.toml`.
+
+- Python 3.10 or newer
+- `numpy`
+- `scipy`
+- `matplotlib`
+- `pytest`, only for the small smoke-test suite
+- `juliacall`, for Julia-backed operator construction
+
+Julia dependencies are listed in `lib/julia/Project.toml` and pinned by
+`lib/julia/Manifest.toml`. The Julia project expects:
+
+- Julia 1.12 or newer
+- `GaussFSBP`
+- `GeneralizedGauss`, available at `GaussFSBP/lib/GeneralizedGauss.jl`
+- the other Julia packages declared in `lib/julia/Project.toml`
+
+Set up the Python environment from the repository root:
 
 ```bash
-python3.12 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
-pytest -q
-python examples/smooth_sanity_check.py
+python -m pip install -e ".[dev,julia]"
 ```
 
-## Julia operator builders
-
-The optional Julia-backed operator builders use one shared Julia
-environment at `lib/julia`. Wherever you choose to install the repo `GaussFSBP`, 
-keep a symlink to that repo in `lib/GaussFSBP`. That repo also needs it's own
-local pointer to a `lib/GeneralizedGauss.jl` repo (see README therein).
+Set up the local Julia dependency pointer:
 
 ```bash
-ln -s [path to GaussFSBP] lib/GaussFSBP  # only if the symlink is missing
+ln -s /path/to/GaussFSBP lib/GaussFSBP  # only if lib/GaussFSBP is missing
 julia --project=lib/julia -e 'import Pkg; Pkg.instantiate()'
-julia --project=lib/julia -e 'using GaussFSBP, SummationByPartsOperatorsExtra'
+julia --project=lib/julia -e 'using GaussFSBP, GeneralizedGauss'
 ```
 
-When Python loads Julia through `juliacall`, the Julia executable is chosen
-before the repository code can call `Pkg.activate`. The bridge configures
-`juliacall` to use the `julia` executable visible on Python's `PATH`; set
-`PYTHON_JULIACALL_EXE=/path/to/julia` before running Python if a different
-Julia should be embedded.
+If Python should embed a specific Julia executable, set
+`PYTHON_JULIACALL_EXE=/path/to/julia` before running the Python scripts.
+
+## Running the Code
+
+Run the smoke tests:
+
+```bash
+python -m pytest -q
+```
+
+Run the pure-Python smooth sanity check:
+
+```bash
+python driver/smooth_sanity_check.py
+```
+
+Run the Julia-backed operator construction example:
+
+```bash
+python driver/build_exponential_operator_example.py
+```
+
+Run the main paper drivers:
+
+```bash
+python driver/Exponential_Problem.py
+python driver/Mixed_Exponential_Problem.py
+python driver/Mixed_Endpoint_Singularity.py
+```
+
+
+## Discrete System
+
+The code solves steady one-dimensional variable-coefficient advection problems
+using element-local SBP differentiation and SAT coupling. The semidiscrete form
+is
+
+```text
+u_t = f - A D(Bu) + SAT(u),
+```
+
+where `A` and `B` are diagonal coefficient matrices evaluated at element nodes.
+For steady problems the code assembles the sparse linear system
+
+```text
+A D(Bu) - SAT_linear(u) = f + SAT_known
+```
+
+and solves it with SciPy sparse linear algebra. Neighboring elements keep
+separate nodal states and are coupled weakly through SAT fluxes, so open,
+closed, and mixed reference operators can be used in the same mesh.
