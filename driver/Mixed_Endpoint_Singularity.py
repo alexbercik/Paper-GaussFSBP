@@ -664,8 +664,7 @@ if __name__ == "__main__":
                 )
 
     if SHOW_PLOTS:
+        plt.show(block=False)
         if sys.stdin.isatty():
-            plt.show(block=False)
             input("Press Enter to close all plots...")
-        # Batch publication checks should finish without waiting for stdin.
         plt.close("all")

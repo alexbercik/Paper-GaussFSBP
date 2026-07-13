@@ -737,11 +737,10 @@ if solution_profiles:
     )
 
 if SHOW_PLOTS:
+    plt.show(block=False)
     if sys.stdin.isatty():
-        plt.show()
-    else:
-        # Batch publication checks should finish without opening a GUI window.
-        plt.close("all")
+        input("Press Enter to close all plots...")
+    plt.close("all")
 
 
 # SAVE_PATH = "p4_closed_central.npz"

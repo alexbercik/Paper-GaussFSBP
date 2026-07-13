@@ -284,8 +284,8 @@ COMPARISON_RUNS = [
     },
 ]
 
-RUNS = RUNS_LO_CLOSED
-savefile=None #'exp_mixed_p4_open_eps00125.pdf'
+RUNS = RUNS_LO_OPEN
+savefile='exp_bdy_layer.pdf'
 
 def load_cache() -> dict:
     if CACHE_FILE.exists() and CACHE_FILE.stat().st_size > 0:
@@ -716,8 +716,7 @@ if __name__ == "__main__":
             )
 
     if SHOW_PLOTS:
+        plt.show(block=False)
         if sys.stdin.isatty():
-            plt.show(block=False)
             input("Press Enter to close all plots...")
-        # Batch publication checks should finish without waiting for stdin.
         plt.close("all")
